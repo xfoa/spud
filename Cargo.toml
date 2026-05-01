@@ -6,7 +6,6 @@ rust-version = "1.88"
 
 [dependencies]
 iced = { version = "0.14", default-features = true }
-iced_font_awesome = "0.4"
 
 [profile.dev]
 opt-level = 1

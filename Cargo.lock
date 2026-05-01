@@ -1211,17 +1211,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced_font_awesome"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "964e0d089da27a70a30b4e93af6a534327c2c8b530745ff2702b6abf29dc7661"
-dependencies = [
- "iced",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "iced_futures"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2765,7 +2754,6 @@ name = "spud"
 version = "0.1.0"
 dependencies = [
  "iced",
- "iced_font_awesome",
 ]
 
 [[package]]

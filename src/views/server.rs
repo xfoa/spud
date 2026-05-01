@@ -2,6 +2,7 @@ use iced::widget::{checkbox, column, row, text, text_input};
 use iced::{Element, Length};
 
 use crate::components as ui;
+use crate::icons;
 use crate::theme as mt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,11 +23,11 @@ impl Page {
         }
     }
 
-    fn icon(self) -> &'static str {
+    fn icon(self) -> char {
         match self {
-            Page::Status => "signal",
-            Page::Network => "network-wired",
-            Page::Security => "shield-halved",
+            Page::Status => icons::SIGNAL,
+            Page::Network => icons::NETWORK_WIRED,
+            Page::Security => icons::SHIELD_HALVED,
         }
     }
 }

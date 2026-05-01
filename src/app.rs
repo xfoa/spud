@@ -2,6 +2,7 @@ use iced::widget::{column, container, row, scrollable, stack};
 use iced::{Background, Element, Length, Task, Theme};
 
 use crate::components as ui;
+use crate::icons;
 use crate::theme as mt;
 use crate::views::{client, server};
 
@@ -103,7 +104,7 @@ impl Spud {
 
         let nav_top = column(mode_nav).spacing(4).width(Length::Fill);
 
-        let about_btn = ui::nav_item("About", "circle-info", self.showing_about, Message::ShowAbout);
+        let about_btn = ui::nav_item("About", icons::CIRCLE_INFO, self.showing_about, Message::ShowAbout);
 
         let nav_col = column![nav_top, ui::v_space_fill(), about_btn]
             .spacing(4)

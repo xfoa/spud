@@ -67,7 +67,7 @@ pub fn top_tab<'a, Message: 'a + Clone>(
 
 pub fn nav_item<'a, Message: 'a + Clone>(
     label: &'a str,
-    icon_name: &'a str,
+    icon: char,
     active: bool,
     on_press: Message,
 ) -> Element<'a, Message> {
@@ -77,14 +77,15 @@ pub fn nav_item<'a, Message: 'a + Clone>(
         (mt::ON_SURFACE, mt::ON_SURFACE_VARIANT)
     };
 
-    let icon = container(
-        iced_font_awesome::fa_icon_solid(icon_name)
-            .size(16.0)
+    let icon_widget = container(
+        text(icon)
+            .font(crate::icons::FA_SOLID)
+            .size(16)
             .color(icon_color),
     )
     .center_x(Length::Fixed(22.0));
 
-    let content = row![icon, text(label).size(14).color(text_color)]
+    let content = row![icon_widget, text(label).size(14).color(text_color)]
         .spacing(12)
         .align_y(iced::Alignment::Center);
 
