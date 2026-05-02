@@ -1,5 +1,6 @@
-use iced::widget::{checkbox, column, pick_list, row, slider, text, text_input};
-use iced::{Element, Length};
+use iced::keyboard::{Key, Modifiers};
+use iced::widget::{checkbox, column, container, pick_list, row, slider, text, text_input};
+use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
 
 use crate::components as ui;
 use crate::icons;
@@ -101,10 +102,13 @@ pub enum Message {
     SensitivityChanged(f32),
     NaturalScrollToggled(bool),
     CaptureModeChanged(CaptureMode),
-    HotkeyChanged(String),
     RequireAuthToggled(bool),
     PassphraseChanged(String),
     SelectDiscovered(usize),
+    OpenHotkeyDialog,
+    CloseHotkeyDialog,
+    ConfirmHotkey,
+    HotkeyInput(Key, Modifiers),
 }
 
 pub struct State {
@@ -119,6 +123,8 @@ pub struct State {
     require_auth: bool,
     passphrase: String,
     discovered: Vec<DiscoveredServer>,
+    pub hotkey_dialog_open: bool,
+    pending_hotkey: String,
 }
 
 impl Default for State {
@@ -135,6 +141,8 @@ impl Default for State {
             require_auth: true,
             passphrase: String::new(),
             discovered: example_servers(),
+            hotkey_dialog_open: false,
+            pending_hotkey: String::new(),
         }
     }
 }
@@ -154,13 +162,36 @@ impl State {
             Message::SensitivityChanged(v) => self.sensitivity = v,
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
             Message::CaptureModeChanged(m) => self.capture_mode = m,
-            Message::HotkeyChanged(s) => self.hotkey = s,
             Message::RequireAuthToggled(v) => self.require_auth = v,
             Message::PassphraseChanged(s) => self.passphrase = s,
             Message::SelectDiscovered(i) => {
                 if let Some(server) = self.discovered.get(i) {
                     self.host = server.host.clone();
                     self.port = server.port.clone();
+                }
+            }
+            Message::OpenHotkeyDialog => {
+                self.hotkey_dialog_open = true;
+                self.pending_hotkey = String::new();
+            }
+            Message::CloseHotkeyDialog => {
+                self.hotkey_dialog_open = false;
+                self.pending_hotkey = String::new();
+            }
+            Message::ConfirmHotkey => {
+                if !self.pending_hotkey.is_empty() {
+                    self.hotkey = self.pending_hotkey.clone();
+                }
+                self.hotkey_dialog_open = false;
+                self.pending_hotkey = String::new();
+            }
+            Message::HotkeyInput(key, mods) => {
+                use iced::keyboard::key::Named;
+                if matches!(key, Key::Named(Named::Escape)) {
+                    self.hotkey_dialog_open = false;
+                    self.pending_hotkey = String::new();
+                } else if let Some(chord) = format_chord(&key, mods) {
+                    self.pending_hotkey = chord;
                 }
             }
         }
@@ -406,16 +437,98 @@ impl State {
                 ui::v_space(4.0),
                 ui::helper_text("Used when capture mode is set to Hotkey."),
                 ui::v_space(16.0),
-                text_input("Press a chord", &self.hotkey)
-                    .on_input(Message::HotkeyChanged)
-                    .padding(12)
-                    .size(14),
+                row![
+                    text(&self.hotkey).size(14).color(mt::ON_SURFACE),
+                    ui::h_space_fill(),
+                    ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
+                ]
+                .align_y(iced::Alignment::Center),
             ]
             .spacing(0),
         );
 
         let body = column![capture_card, ui::v_space(16.0), hotkey_card].spacing(0);
         ui::page_body("Hotkeys", body)
+    }
+
+    pub fn hotkey_dialog(&self) -> Option<Element<'_, Message>> {
+        if !self.hotkey_dialog_open {
+            return None;
+        }
+
+        let chord_display: Element<Message> = if self.pending_hotkey.is_empty() {
+            text("Hold your desired key combination...")
+                .size(16)
+                .color(mt::ON_SURFACE_VARIANT)
+                .into()
+        } else {
+            text(&self.pending_hotkey)
+                .size(22)
+                .color(mt::ON_SURFACE)
+                .into()
+        };
+
+        let dialog = container(
+            column![
+                text("Record hotkey").size(18).color(mt::ON_SURFACE),
+                ui::v_space(6.0),
+                ui::helper_text(
+                    "Hold the key combination you want, then click 'Use this hotkey'.",
+                ),
+                ui::v_space(24.0),
+                container(chord_display)
+                    .width(Length::Fill)
+                    .padding(Padding::from([20, 16]))
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(mt::with_alpha(mt::PRIMARY, 0.06))),
+                        border: Border {
+                            color: mt::OUTLINE_VARIANT,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    }),
+                ui::v_space(24.0),
+                row![
+                    ui::h_space_fill(),
+                    ui::outlined_button("Cancel", Message::CloseHotkeyDialog),
+                    ui::h_space(8.0),
+                    ui::filled_button(
+                        "Use this hotkey",
+                        (!self.pending_hotkey.is_empty()).then_some(Message::ConfirmHotkey),
+                    ),
+                ]
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(0),
+        )
+        .width(Length::Fixed(440.0))
+        .padding(Padding::from(28))
+        .style(|_| container::Style {
+            background: Some(Background::Color(mt::SURFACE)),
+            border: Border {
+                radius: 16.0.into(),
+                ..Default::default()
+            },
+            shadow: Shadow {
+                color: mt::with_alpha(Color::BLACK, 0.3),
+                offset: Vector::new(0.0, 8.0),
+                blur_radius: 32.0,
+            },
+            ..Default::default()
+        });
+
+        let backdrop = container(dialog)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(|_| container::Style {
+                background: Some(Background::Color(mt::with_alpha(Color::BLACK, 0.45))),
+                ..Default::default()
+            });
+
+        Some(backdrop.into())
     }
 
     fn security_page(&self) -> Element<'_, Message> {
@@ -450,4 +563,71 @@ impl State {
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
     }
+}
+
+fn format_chord(key: &Key, modifiers: Modifiers) -> Option<String> {
+    use iced::keyboard::key::Named;
+
+    let key_str = match key {
+        Key::Named(named) => match named {
+            Named::Control
+            | Named::Shift
+            | Named::Alt
+            | Named::Super
+            | Named::Hyper
+            | Named::Meta
+            | Named::Escape => return None,
+            Named::Space => "Space",
+            Named::Enter => "Enter",
+            Named::Tab => "Tab",
+            Named::Backspace => "Backspace",
+            Named::Delete => "Delete",
+            Named::Insert => "Insert",
+            Named::Home => "Home",
+            Named::End => "End",
+            Named::PageUp => "Page Up",
+            Named::PageDown => "Page Down",
+            Named::ArrowLeft => "Left",
+            Named::ArrowRight => "Right",
+            Named::ArrowUp => "Up",
+            Named::ArrowDown => "Down",
+            Named::F1 => "F1",
+            Named::F2 => "F2",
+            Named::F3 => "F3",
+            Named::F4 => "F4",
+            Named::F5 => "F5",
+            Named::F6 => "F6",
+            Named::F7 => "F7",
+            Named::F8 => "F8",
+            Named::F9 => "F9",
+            Named::F10 => "F10",
+            Named::F11 => "F11",
+            Named::F12 => "F12",
+            Named::PrintScreen => "Print Screen",
+            Named::ScrollLock => "Scroll Lock",
+            Named::Pause => "Pause",
+            Named::CapsLock => "Caps Lock",
+            Named::NumLock => "Num Lock",
+            _ => return None,
+        }
+        .to_string(),
+        Key::Character(c) => c.to_uppercase().to_string(),
+        Key::Unidentified => return None,
+    };
+
+    let mut parts: Vec<&str> = Vec::new();
+    if modifiers.control() {
+        parts.push("Ctrl");
+    }
+    if modifiers.alt() {
+        parts.push("Alt");
+    }
+    if modifiers.shift() {
+        parts.push("Shift");
+    }
+    if modifiers.logo() {
+        parts.push("Super");
+    }
+    parts.push(&key_str);
+    Some(parts.join("+"))
 }

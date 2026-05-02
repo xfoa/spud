@@ -78,7 +78,20 @@ impl Spud {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
+        let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
+
+        if self.mode == Mode::Client && self.client.hotkey_dialog_open {
+            let keys = iced::keyboard::listen().filter_map(|event| {
+                if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = event {
+                    Some(Message::Client(client::Message::HotkeyInput(key, modifiers)))
+                } else {
+                    None
+                }
+            });
+            Subscription::batch([resize, keys])
+        } else {
+            resize
+        }
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -167,7 +180,16 @@ impl Spud {
             .align_right(Length::Fill)
             .align_bottom(Length::Fill);
 
-        stack![window_content, handle_overlay]
+        let mut layers: Vec<Element<Message>> = vec![
+            window_content.into(),
+            handle_overlay.into(),
+        ];
+
+        if let Some(dialog) = self.client.hotkey_dialog().map(|d| d.map(Message::Client)) {
+            layers.push(dialog);
+        }
+
+        stack(layers)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
