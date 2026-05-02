@@ -1,3 +1,5 @@
-# spud
+# Spud
 
-Send inputs to a remote machine, with minimum input lag and rollback netcode.
+Send inputs to a remote machine, with input lag compensation.
+
+## WARNING: This project is a work in progress and is currently unusable
