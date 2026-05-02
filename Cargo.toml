@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.88"
 
 [dependencies]
-iced = { version = "0.14", default-features = true }
+iced = { version = "0.14", default-features = true, features = ["image"] }
 hostname = "0.4"
 
 [profile.dev]

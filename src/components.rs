@@ -24,15 +24,14 @@ pub fn top_tab<'a, Message: 'a + Clone>(
     active: bool,
     on_press: Message,
 ) -> Element<'a, Message> {
-    let label_color = if active { mt::PRIMARY } else { mt::ON_SURFACE_VARIANT };
-
+    let label_color = if active { mt::ON_SURFACE } else { mt::ON_SURFACE_VARIANT };
     let indicator_color = if active { mt::PRIMARY } else { Color::TRANSPARENT };
 
     let content = column![
         container(text(label).size(15).color(label_color))
             .center_x(Length::Fill)
             .padding(Padding::from([14, 24])),
-        container(Space::new().height(Length::Fixed(3.0)))
+        container(Space::new().height(Length::Fixed(4.0)))
             .width(Length::Fill)
             .style(move |_| container::Style {
                 background: Some(Background::Color(indicator_color)),
@@ -45,17 +44,19 @@ pub fn top_tab<'a, Message: 'a + Clone>(
         .padding(0)
         .width(Length::Fill)
         .style(move |_, status| {
-            let hover_overlay = matches!(
-                status,
-                button::Status::Hovered | button::Status::Pressed
-            );
-            let bg = if hover_overlay {
-                Some(Background::Color(mt::with_alpha(mt::PRIMARY, 0.06)))
+            let base_bg = if active {
+                mt::with_alpha(mt::PRIMARY_CONTAINER, 0.45)
             } else {
-                Some(Background::Color(Color::TRANSPARENT))
+                Color::TRANSPARENT
+            };
+            let bg = match status {
+                button::Status::Hovered | button::Status::Pressed => {
+                    mt::with_alpha(mt::PRIMARY, 0.08)
+                }
+                _ => base_bg,
             };
             button::Style {
-                background: bg,
+                background: Some(Background::Color(bg)),
                 text_color: label_color,
                 border: Border::default(),
                 shadow: Shadow::default(),
