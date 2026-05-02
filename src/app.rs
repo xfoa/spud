@@ -153,12 +153,7 @@ impl Spud {
                 .map(|event| Message::Client(client::Message::Capture(event)));
             subs.push(capture);
         } else if self.mode == Mode::Client && self.client.is_capturing_hotkey() {
-            let hotkey = self.client.hotkey_string().to_string();
-            if let Some(handles) = self.wayland_handles {
-                subs.push(Subscription::run_with(
-                    handles,
-                    build_wayland_hotkey_stream,
-                ));
+            if self.wayland_handles.is_some() {
                 let keyboard = iced::event::listen().filter_map(|event| match event {
                     iced::Event::Keyboard(_) => {
                         Some(Message::Client(client::Message::Capture(event)))
@@ -167,6 +162,7 @@ impl Spud {
                 });
                 subs.push(keyboard);
             } else {
+                let hotkey = self.client.hotkey_string().to_string();
                 subs.push(Subscription::run_with(hotkey, build_hotkey_stream));
             }
         }

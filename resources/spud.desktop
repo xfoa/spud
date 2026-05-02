@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Spud
+Comment=Remote desktop client and server
+Exec=spud
+Icon=spud
+Categories=Network;RemoteAccess;
+StartupWMClass=Spud

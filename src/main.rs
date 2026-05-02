@@ -1,3 +1,5 @@
+use iced::window::settings::PlatformSpecific;
+
 mod app;
 mod components;
 mod config;
@@ -25,7 +27,7 @@ fn main() -> iced::Result {
             min_size: Some(iced::Size::new(800.0, 600.0)),
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: app_name.to_string(),
-                ..Default::default()
+                ..PlatformSpecific::default()
             },
             ..Default::default()
         })

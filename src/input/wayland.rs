@@ -10,6 +10,9 @@ use wayland_backend::sys::client::{Backend, ObjectId};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
+use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::{
+    zwp_keyboard_shortcuts_inhibit_manager_v1, zwp_keyboard_shortcuts_inhibitor_v1,
+};
 use wayland_protocols::wp::pointer_constraints::zv1::client::{
     zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
 };
@@ -116,6 +119,17 @@ fn run_wayland(
                 return Ok(());
             }
         };
+    let inhibit_manager: Option<
+        zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1,
+    > = match globals.bind(&qh, 1..=1, ()) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            eprintln!(
+                "[spud] zwp_keyboard_shortcuts_inhibit_manager_v1 unavailable: {e}; compositor shortcuts will still escape"
+            );
+            None
+        }
+    };
 
     let pointer = seat.get_pointer(&qh, ());
     let _relative = rel_manager.get_relative_pointer(&pointer, &qh, ());
@@ -131,6 +145,7 @@ fn run_wayland(
     };
 
     let mut locked: Option<zwp_locked_pointer_v1::ZwpLockedPointerV1> = None;
+    let mut inhibitor: Option<zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1> = None;
 
     conn.flush()?;
 
@@ -156,8 +171,18 @@ fn run_wayland(
                 if let Some(serial) = state.last_enter_serial {
                     pointer.set_cursor(serial, None, 0, 0);
                 }
-            } else if let Some(l) = locked.take() {
-                l.destroy();
+                if inhibitor.is_none() {
+                    if let Some(manager) = &inhibit_manager {
+                        inhibitor = Some(manager.inhibit_shortcuts(&surface, &seat, &qh, ()));
+                    }
+                }
+            } else {
+                if let Some(l) = locked.take() {
+                    l.destroy();
+                }
+                if let Some(i) = inhibitor.take() {
+                    i.destroy();
+                }
             }
             let _ = state
                 .output
@@ -190,8 +215,11 @@ fn run_wayland(
 
     if let Some(l) = locked.take() {
         l.destroy();
-        let _ = conn.flush();
     }
+    if let Some(i) = inhibitor.take() {
+        i.destroy();
+    }
+    let _ = conn.flush();
 
     Ok(())
 }
@@ -326,3 +354,5 @@ wayland_client::delegate_noop!(State: ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(State: ignore zwp_pointer_constraints_v1::ZwpPointerConstraintsV1);
 wayland_client::delegate_noop!(State: ignore zwp_locked_pointer_v1::ZwpLockedPointerV1);
 wayland_client::delegate_noop!(State: ignore zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1);
+wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1);
+wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1);
