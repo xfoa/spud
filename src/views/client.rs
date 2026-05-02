@@ -10,19 +10,19 @@ use crate::theme as mt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Connection,
-    Input,
-    Hotkeys,
+    Capture,
+    Mouse,
     Security,
 }
 
 impl Page {
-    const ALL: [Page; 4] = [Page::Connection, Page::Input, Page::Hotkeys, Page::Security];
+    const ALL: [Page; 4] = [Page::Connection, Page::Capture, Page::Mouse, Page::Security];
 
     fn label(self) -> &'static str {
         match self {
             Page::Connection => "Connection",
-            Page::Input => "Input",
-            Page::Hotkeys => "Hotkeys",
+            Page::Mouse => "Mouse",
+            Page::Capture => "Capture",
             Page::Security => "Security",
         }
     }
@@ -30,8 +30,8 @@ impl Page {
     fn icon(self) -> char {
         match self {
             Page::Connection => icons::PLUG,
-            Page::Input => icons::COMPUTER_MOUSE,
-            Page::Hotkeys => icons::KEYBOARD,
+            Page::Mouse => icons::COMPUTER_MOUSE,
+            Page::Capture => icons::KEYBOARD,
             Page::Security => icons::SHIELD_HALVED,
         }
     }
@@ -89,6 +89,8 @@ pub enum Message {
     CloseHotkeyDialog,
     ConfirmHotkey,
     HotkeyInput(Key, Modifiers),
+    Capture(iced::Event),
+    HotkeyEvent(crate::input::InputEvent),
 }
 
 pub struct State {
@@ -200,7 +202,27 @@ impl State {
                     self.pending_hotkey = chord;
                 }
             }
+            Message::Capture(event) => {
+                if matches!(event, iced::Event::Keyboard(_) | iced::Event::Mouse(_)) {
+                    println!("[capture] {event:?}");
+                }
+            }
+            Message::HotkeyEvent(event) => {
+                println!("[hotkey] {event:?}");
+            }
         }
+    }
+
+    pub fn is_capturing_focused(&self) -> bool {
+        self.connected && self.capture_mode == CaptureMode::Focus
+    }
+
+    pub fn is_capturing_hotkey(&self) -> bool {
+        self.connected && self.capture_mode == CaptureMode::Hotkey
+    }
+
+    pub fn hotkey_string(&self) -> &str {
+        &self.hotkey
     }
 
     pub fn nav_items(&self, about_active: bool) -> Vec<Element<'_, Message>> {
@@ -221,8 +243,8 @@ impl State {
     pub fn view_content(&self, content_width: f32) -> Element<'_, Message> {
         match self.page {
             Page::Connection => self.connection_page(content_width),
-            Page::Input => self.input_page(),
-            Page::Hotkeys => self.hotkeys_page(),
+            Page::Mouse => self.input_page(),
+            Page::Capture => self.hotkeys_page(),
             Page::Security => self.security_page(),
         }
     }

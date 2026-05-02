@@ -1,3 +1,5 @@
+use iced::futures::Stream;
+use iced::futures::StreamExt;
 use iced::widget::{column, container, row, scrollable, stack};
 use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
 
@@ -6,6 +8,11 @@ use crate::config::{Config, Mode};
 use crate::icons;
 use crate::theme as mt;
 use crate::views::{client, server};
+
+fn build_hotkey_stream(hotkey: &String) -> impl Stream<Item = Message> + 'static {
+    crate::input::listen(hotkey.clone())
+        .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -100,6 +107,7 @@ impl Spud {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
+        let mut subs = vec![resize];
 
         if self.mode == Mode::Client && self.client.hotkey_dialog_open {
             let keys = iced::keyboard::listen().filter_map(|event| {
@@ -109,10 +117,17 @@ impl Spud {
                     None
                 }
             });
-            Subscription::batch([resize, keys])
-        } else {
-            resize
+            subs.push(keys);
+        } else if self.mode == Mode::Client && self.client.is_capturing_focused() {
+            let capture = iced::event::listen()
+                .map(|event| Message::Client(client::Message::Capture(event)));
+            subs.push(capture);
+        } else if self.mode == Mode::Client && self.client.is_capturing_hotkey() {
+            let hotkey = self.client.hotkey_string().to_string();
+            subs.push(Subscription::run_with(hotkey, build_hotkey_stream));
         }
+
+        Subscription::batch(subs)
     }
 
     pub fn view(&self) -> Element<'_, Message> {

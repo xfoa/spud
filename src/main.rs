@@ -2,6 +2,7 @@ mod app;
 mod components;
 mod config;
 mod icons;
+mod input;
 mod theme;
 mod views;
 
