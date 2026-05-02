@@ -6,11 +6,20 @@ use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
 use crate::components as ui;
 use crate::config::{Config, Mode};
 use crate::icons;
+use crate::input::WaylandHandles;
 use crate::theme as mt;
 use crate::views::{client, server};
 
 fn build_hotkey_stream(hotkey: &String) -> impl Stream<Item = Message> + 'static {
     crate::input::listen(hotkey.clone())
+        .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
+}
+
+fn build_wayland_hotkey_stream(
+    data: &(String, WaylandHandles),
+) -> impl Stream<Item = Message> + 'static {
+    let (hotkey, handles) = data.clone();
+    crate::input::listen_wayland(hotkey, handles)
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
@@ -23,6 +32,8 @@ pub enum Message {
     Server(server::Message),
     StartResize,
     WindowResized(Size),
+    WindowOpened(iced::window::Id),
+    WaylandHandlesReady(Option<WaylandHandles>),
 }
 
 pub struct Spud {
@@ -31,6 +42,8 @@ pub struct Spud {
     client: client::State,
     server: server::State,
     window_size: Size,
+    wayland_handles: Option<WaylandHandles>,
+    handles_attempted: bool,
 }
 
 impl Default for Spud {
@@ -42,6 +55,8 @@ impl Default for Spud {
             client: client::State::from_config(&config.client),
             server: server::State::from_config(&config.server),
             window_size: Size::new(1000.0, 650.0),
+            wayland_handles: None,
+            handles_attempted: false,
         }
     }
 }
@@ -102,12 +117,28 @@ impl Spud {
                 self.window_size = size;
                 Task::none()
             }
+            Message::WindowOpened(id) => {
+                if self.handles_attempted {
+                    return Task::none();
+                }
+                self.handles_attempted = true;
+                iced::window::run(id, |window| crate::input::extract_wayland_handles(window))
+                    .map(Message::WaylandHandlesReady)
+            }
+            Message::WaylandHandlesReady(handles) => {
+                self.wayland_handles = handles;
+                Task::none()
+            }
         }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
         let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
         let mut subs = vec![resize];
+
+        if !self.handles_attempted {
+            subs.push(iced::window::open_events().map(Message::WindowOpened));
+        }
 
         if self.mode == Mode::Client && self.client.hotkey_dialog_open {
             let keys = iced::keyboard::listen().filter_map(|event| {
@@ -124,7 +155,21 @@ impl Spud {
             subs.push(capture);
         } else if self.mode == Mode::Client && self.client.is_capturing_hotkey() {
             let hotkey = self.client.hotkey_string().to_string();
-            subs.push(Subscription::run_with(hotkey, build_hotkey_stream));
+            if let Some(handles) = self.wayland_handles {
+                subs.push(Subscription::run_with(
+                    (hotkey.clone(), handles),
+                    build_wayland_hotkey_stream,
+                ));
+                let keyboard = iced::event::listen().filter_map(|event| match event {
+                    iced::Event::Keyboard(_) => {
+                        Some(Message::Client(client::Message::Capture(event)))
+                    }
+                    _ => None,
+                });
+                subs.push(keyboard);
+            } else {
+                subs.push(Subscription::run_with(hotkey, build_hotkey_stream));
+            }
         }
 
         Subscription::batch(subs)

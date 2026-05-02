@@ -1,7 +1,11 @@
 #[cfg(target_os = "linux")]
+mod wayland;
+#[cfg(target_os = "linux")]
 mod x11;
 
-use iced::futures::stream::{self, BoxStream};
+use iced::futures::stream::BoxStream;
+#[cfg(not(target_os = "linux"))]
+use iced::futures::stream;
 
 #[derive(Debug, Clone)]
 pub enum InputEvent {
@@ -13,17 +17,30 @@ pub enum InputEvent {
     BackendError(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WaylandHandles {
+    pub display: usize,
+    pub surface: usize,
+}
+
+pub fn extract_wayland_handles(window: &dyn iced::Window) -> Option<WaylandHandles> {
+    use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
+
+    let display = match window.display_handle().ok()?.as_raw() {
+        RawDisplayHandle::Wayland(d) => d.display.as_ptr() as usize,
+        _ => return None,
+    };
+    let surface = match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Wayland(w) => w.surface.as_ptr() as usize,
+        _ => return None,
+    };
+    Some(WaylandHandles { display, surface })
+}
+
 pub fn listen(hotkey: String) -> BoxStream<'static, InputEvent> {
     #[cfg(target_os = "linux")]
     {
-        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            return Box::pin(x11::listen(hotkey));
-        }
-        return Box::pin(stream::once(async {
-            InputEvent::BackendError(
-                "hotkey mode is not yet implemented for Wayland".to_string(),
-            )
-        }));
+        return Box::pin(x11::listen(hotkey));
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -31,6 +48,25 @@ pub fn listen(hotkey: String) -> BoxStream<'static, InputEvent> {
         Box::pin(stream::once(async {
             InputEvent::BackendError(
                 "hotkey mode is not yet implemented for this platform".to_string(),
+            )
+        }))
+    }
+}
+
+pub fn listen_wayland(
+    hotkey: String,
+    handles: WaylandHandles,
+) -> BoxStream<'static, InputEvent> {
+    #[cfg(target_os = "linux")]
+    {
+        return Box::pin(wayland::listen(hotkey, handles));
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (hotkey, handles);
+        Box::pin(stream::once(async {
+            InputEvent::BackendError(
+                "wayland hotkey mode is only available on Linux".to_string(),
             )
         }))
     }

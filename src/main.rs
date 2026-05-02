@@ -22,7 +22,7 @@ fn main() -> iced::Result {
         .window_size(iced::Size::new(1000.0, 650.0))
         .window(iced::window::Settings {
             icon,
-            min_size: Some(iced::Size::new(640.0, 480.0)),
+            min_size: Some(iced::Size::new(800.0, 600.0)),
             platform_specific: iced::window::settings::PlatformSpecific {
                 application_id: app_name.to_string(),
                 ..Default::default()
