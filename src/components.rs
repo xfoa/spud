@@ -297,7 +297,7 @@ pub fn icon_pick<'a, Message: 'a + Clone>(
     selected: bool,
     on_press: Message,
 ) -> Element<'a, Message> {
-    let icon_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::ON_SURFACE };
+    let icon_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::PRIMARY };
 
     button(
         container(text(icon).font(crate::icons::FA_SOLID).size(24).color(icon_color))
