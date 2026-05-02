@@ -53,21 +53,38 @@ pub fn listen(hotkey: String) -> BoxStream<'static, InputEvent> {
     }
 }
 
-pub fn listen_wayland(
-    hotkey: String,
-    handles: WaylandHandles,
-) -> BoxStream<'static, InputEvent> {
+pub fn listen_wayland(handles: WaylandHandles) -> BoxStream<'static, InputEvent> {
     #[cfg(target_os = "linux")]
     {
-        return Box::pin(wayland::listen(hotkey, handles));
+        return Box::pin(wayland::listen(handles));
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (hotkey, handles);
+        let _ = handles;
         Box::pin(stream::once(async {
             InputEvent::BackendError(
                 "wayland hotkey mode is only available on Linux".to_string(),
             )
         }))
     }
+}
+
+#[cfg(target_os = "linux")]
+pub fn toggle_wayland_grab() -> bool {
+    wayland::signal().toggle()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn toggle_wayland_grab() -> bool {
+    false
+}
+
+#[cfg(target_os = "linux")]
+pub fn is_wayland_grabbed() -> bool {
+    wayland::signal().is_grabbed()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn is_wayland_grabbed() -> bool {
+    false
 }

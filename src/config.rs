@@ -54,8 +54,8 @@ impl Default for CaptureMode {
 impl std::fmt::Display for CaptureMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            CaptureMode::Hotkey => "Toggled by hotkey",
-            CaptureMode::Focus => "When window has focus",
+            CaptureMode::Hotkey => "Toggled by hotkey (relative mouse)",
+            CaptureMode::Focus => "When window has focus (absolute mouse)",
         };
         f.write_str(s)
     }

@@ -16,10 +16,9 @@ fn build_hotkey_stream(hotkey: &String) -> impl Stream<Item = Message> + 'static
 }
 
 fn build_wayland_hotkey_stream(
-    data: &(String, WaylandHandles),
+    handles: &WaylandHandles,
 ) -> impl Stream<Item = Message> + 'static {
-    let (hotkey, handles) = data.clone();
-    crate::input::listen_wayland(hotkey, handles)
+    crate::input::listen_wayland(*handles)
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
@@ -157,7 +156,7 @@ impl Spud {
             let hotkey = self.client.hotkey_string().to_string();
             if let Some(handles) = self.wayland_handles {
                 subs.push(Subscription::run_with(
-                    (hotkey.clone(), handles),
+                    handles,
                     build_wayland_hotkey_stream,
                 ));
                 let keyboard = iced::event::listen().filter_map(|event| match event {

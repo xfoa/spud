@@ -1,13 +1,11 @@
 use std::error::Error;
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 
-use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
 use iced::futures::channel::mpsc;
 use iced::futures::stream::Stream;
-use iced::futures::StreamExt;
 use wayland_backend::sys::client::{Backend, ObjectId};
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_pointer, wl_registry, wl_seat, wl_surface};
@@ -21,40 +19,20 @@ use wayland_protocols::wp::relative_pointer::zv1::client::{
 
 use super::{InputEvent, WaylandHandles};
 
-const SHORTCUT_ID: &str = "spud-toggle-grab";
-
-pub fn listen(
-    hotkey: String,
-    handles: WaylandHandles,
-) -> impl Stream<Item = InputEvent> + Send + 'static {
-    iced::stream::channel(256, move |output: mpsc::Sender<InputEvent>| async move {
-        let signal = Arc::new(GrabSignal::default());
-        let portal_signal = signal.clone();
-        let portal_output = output.clone();
-        let portal_hotkey = hotkey.clone();
-        thread::spawn(move || {
-            run_portal(portal_hotkey, portal_signal, portal_output);
-        });
-        thread::spawn(move || {
-            if let Err(e) = run_wayland(handles, signal, output) {
-                eprintln!("[spud] Wayland input backend stopped: {e}");
-            }
-        });
-        std::future::pending::<()>().await;
-    })
-}
-
 #[derive(Default)]
-struct GrabSignal {
+pub struct GrabSignal {
     grabbed: AtomicBool,
     dirty: AtomicBool,
 }
 
 impl GrabSignal {
-    fn toggle(&self) -> bool {
+    pub fn toggle(&self) -> bool {
         let prev = self.grabbed.fetch_xor(true, Ordering::SeqCst);
         self.dirty.store(true, Ordering::SeqCst);
         !prev
+    }
+    pub fn is_grabbed(&self) -> bool {
+        self.grabbed.load(Ordering::SeqCst)
     }
     fn take_dirty(&self) -> Option<bool> {
         if self.dirty.swap(false, Ordering::SeqCst) {
@@ -65,101 +43,21 @@ impl GrabSignal {
     }
 }
 
-fn run_portal(hotkey: String, signal: Arc<GrabSignal>, output: mpsc::Sender<InputEvent>) {
-    if let Err(e) = async_io::block_on(portal_loop(hotkey, signal, output)) {
-        eprintln!("[spud] GlobalShortcuts portal stopped: {e}");
-    }
+pub fn signal() -> &'static Arc<GrabSignal> {
+    static SIGNAL: OnceLock<Arc<GrabSignal>> = OnceLock::new();
+    SIGNAL.get_or_init(|| Arc::new(GrabSignal::default()))
 }
 
-async fn portal_loop(
-    hotkey: String,
-    signal: Arc<GrabSignal>,
-    mut output: mpsc::Sender<InputEvent>,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let proxy = GlobalShortcuts::new().await?;
-    let session = proxy.create_session(Default::default()).await?;
-    let trigger = portal_trigger_from_chord(&hotkey);
-    let shortcut =
-        NewShortcut::new(SHORTCUT_ID, "Toggle remote input capture").preferred_trigger(trigger.as_deref());
-
-    proxy
-        .bind_shortcuts(&session, &[shortcut], None, Default::default())
-        .await?
-        .response()?;
-
-    let mut activated = proxy.receive_activated().await?;
-    while let Some(event) = activated.next().await {
-        if event.shortcut_id() != SHORTCUT_ID {
-            continue;
-        }
-        if output.is_closed() {
-            break;
-        }
-        let grabbed = signal.toggle();
-        if output
-            .try_send(InputEvent::HotkeyToggled { grabbed })
-            .is_err()
-        {
-            break;
-        }
-    }
-    Ok(())
-}
-
-fn portal_trigger_from_chord(hotkey: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut key: Option<&str> = None;
-    for part in hotkey.split('+').map(str::trim) {
-        match part {
-            "Ctrl" => out.push_str("<Ctrl>"),
-            "Alt" => out.push_str("<Alt>"),
-            "Shift" => out.push_str("<Shift>"),
-            "Super" | "Meta" => out.push_str("<Super>"),
-            other => {
-                if key.is_some() {
-                    return None;
-                }
-                key = Some(other);
+pub fn listen(handles: WaylandHandles) -> impl Stream<Item = InputEvent> + Send + 'static {
+    iced::stream::channel(256, move |output: mpsc::Sender<InputEvent>| async move {
+        let signal = signal().clone();
+        thread::spawn(move || {
+            if let Err(e) = run_wayland(handles, signal, output) {
+                eprintln!("[spud] Wayland input backend stopped: {e}");
             }
-        }
-    }
-    let label = key?;
-    let key_str = match label {
-        "Space" => "space",
-        "Enter" => "Return",
-        "Tab" => "Tab",
-        "Backspace" => "BackSpace",
-        "Delete" => "Delete",
-        "Insert" => "Insert",
-        "Home" => "Home",
-        "End" => "End",
-        "Page Up" => "Page_Up",
-        "Page Down" => "Page_Down",
-        "Left" => "Left",
-        "Right" => "Right",
-        "Up" => "Up",
-        "Down" => "Down",
-        "Print Screen" => "Print",
-        "Scroll Lock" => "Scroll_Lock",
-        "Pause" => "Pause",
-        "Caps Lock" => "Caps_Lock",
-        "Num Lock" => "Num_Lock",
-        s if s.starts_with('F') => s,
-        other => {
-            let mut chars = other.chars();
-            if let (Some(c), None) = (chars.next(), chars.next()) {
-                if c.is_ascii_alphabetic() {
-                    out.push(c.to_ascii_lowercase());
-                    return Some(out);
-                }
-                out.push(c);
-                return Some(out);
-            }
-            return None;
-        }
-    };
-    out.push_str(key_str);
-    Some(out)
+        });
+        std::future::pending::<()>().await;
+    })
 }
 
 struct State {
@@ -169,6 +67,7 @@ struct State {
     grabbed: bool,
     pending_axis_x: f64,
     pending_axis_y: f64,
+    last_enter_serial: Option<u32>,
 }
 
 fn run_wayland(
@@ -228,6 +127,7 @@ fn run_wayland(
         grabbed: false,
         pending_axis_x: 0.0,
         pending_axis_y: 0.0,
+        last_enter_serial: None,
     };
 
     let mut locked: Option<zwp_locked_pointer_v1::ZwpLockedPointerV1> = None;
@@ -253,9 +153,15 @@ fn run_wayland(
                     );
                     locked = Some(lock);
                 }
+                if let Some(serial) = state.last_enter_serial {
+                    pointer.set_cursor(serial, None, 0, 0);
+                }
             } else if let Some(l) = locked.take() {
                 l.destroy();
             }
+            let _ = state
+                .output
+                .try_send(InputEvent::HotkeyToggled { grabbed });
             conn.flush()?;
         }
 
@@ -311,6 +217,10 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wl_pointer::Event::Enter { serial, .. } = event {
+            state.last_enter_serial = Some(serial);
+            return;
+        }
         if !state.grabbed {
             return;
         }
@@ -385,10 +295,10 @@ fn emit_axis_buttons(state: &mut State, horizontal: bool) {
         let positive = *value_ref > 0.0;
         *value_ref -= if positive { STEP } else { -STEP };
         let button = match (horizontal, positive) {
-            (false, false) => 4, // wheel up
-            (false, true) => 5,  // wheel down
-            (true, false) => 6,  // wheel left
-            (true, true) => 7,   // wheel right
+            (false, false) => 4,
+            (false, true) => 5,
+            (true, false) => 6,
+            (true, true) => 7,
         };
         let _ = state.output.try_send(InputEvent::MouseButton {
             button,

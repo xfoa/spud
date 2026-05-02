@@ -20,8 +20,6 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 raw-window-handle = "0.6"
-ashpd = { version = "0.13", default-features = false, features = ["async-io", "global_shortcuts"] }
-async-io = "2"
 libc = "0.2"
 
 [profile.dev]

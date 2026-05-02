@@ -203,7 +203,24 @@ impl State {
                 }
             }
             Message::Capture(event) => {
-                if matches!(event, iced::Event::Keyboard(_) | iced::Event::Mouse(_)) {
+                if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                    key,
+                    modifiers,
+                    ..
+                }) = &event
+                {
+                    if self.capture_mode == CaptureMode::Hotkey
+                        && format_chord(key, *modifiers).as_deref() == Some(self.hotkey.as_str())
+                    {
+                        crate::input::toggle_wayland_grab();
+                        return;
+                    }
+                }
+                let forward = match self.capture_mode {
+                    CaptureMode::Focus => true,
+                    CaptureMode::Hotkey => crate::input::is_wayland_grabbed(),
+                };
+                if forward && matches!(event, iced::Event::Keyboard(_) | iced::Event::Mouse(_)) {
                     println!("[capture] {event:?}");
                 }
             }
