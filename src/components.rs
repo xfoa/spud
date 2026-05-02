@@ -1,5 +1,5 @@
-use iced::widget::{button, column, container, mouse_area, row, text, Space};
-use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
+use iced::widget::{button, column, container, image, mouse_area, row, text, Space};
+use iced::{font, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
 use crate::theme as mt;
 
@@ -423,22 +423,74 @@ pub fn corner_handle<'a, Message: 'a + Clone>(on_press: Message) -> Element<'a, 
         .into()
 }
 
-pub fn about_page<'a, Message: 'a>() -> Element<'a, Message> {
+pub fn about_page<'a, Message: 'a + Clone>(on_url_press: impl Fn(String) -> Message + 'a) -> Element<'a, Message> {
+    let icon = image(image::Handle::from_bytes(
+        include_bytes!("../resources/icon.png").as_slice(),
+    ));
+
     let body = card(
         column![
-            text("Spud").size(20).color(mt::ON_SURFACE),
-            v_space(6.0),
-            helper_text("A cross-platform remote control application."),
-            v_space(16.0),
+            container(icon).center_x(Length::Fill),
+            text("Spud").size(32).font(Font { weight: font::Weight::Bold, ..Font::default() }).color(mt::ON_SURFACE).center().width(Length::Fill),
+            v_space(20.0),
+            text("A cross-platform remote control application, optimised for gaming.")
+                .size(16)
+                .color(mt::ON_SURFACE_VARIANT)
+                .center()
+                .width(Length::Fill),
+            v_space(50.0),
             divider(),
             v_space(16.0),
             row![
                 text("Version").size(14).color(mt::ON_SURFACE_VARIANT),
                 h_space_fill(),
-                text("0.1.0").size(14).color(mt::ON_SURFACE),
+                text(env!("CARGO_PKG_VERSION")).size(14).color(mt::ON_SURFACE),
+            ],
+            v_space(6.0),
+            row![
+                text("Contribute").size(14).color(mt::ON_SURFACE_VARIANT),
+                h_space_fill(),
+                button(text("https://github.com/xfoa/spud").size(14))
+                    .on_press(on_url_press("https://github.com/xfoa/spud".to_string()))
+                    .padding(0)
+                    .style(|_, status| button::Style {
+                        background: None,
+                        border: Border::default(),
+                        shadow: Shadow::default(),
+                        text_color: match status {
+                            button::Status::Hovered | button::Status::Pressed => mt::PRIMARY,
+                            _ => darken(mt::PRIMARY, 0.2),
+                        },
+                        snap: false,
+                    }),
+            ],
+            v_space(6.0),
+            row![
+                text("License").size(14).color(mt::ON_SURFACE_VARIANT),
+                h_space_fill(),
+                button(text("GPL-3.0").size(14))
+                    .on_press(on_url_press("https://www.gnu.org/licenses/gpl-3.0.en.html".to_string()))
+                    .padding(0)
+                    .style(|_, status| button::Style {
+                        background: None,
+                        border: Border::default(),
+                        shadow: Shadow::default(),
+                        text_color: match status {
+                            button::Status::Hovered | button::Status::Pressed => mt::PRIMARY,
+                            _ => darken(mt::PRIMARY, 0.2),
+                        },
+                        snap: false,
+                    }),
+            ],
+            v_space(6.0),
+            row![
+                text("Author").size(14).color(mt::ON_SURFACE_VARIANT),
+                h_space_fill(),
+                text("foax").size(14).color(mt::ON_SURFACE),
             ],
         ]
-        .spacing(0),
+        .spacing(0)
+        .width(Length::Fill),
     );
 
     page_body("About", body)

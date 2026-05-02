@@ -2,20 +2,16 @@ use iced::widget::{column, container, row, scrollable, stack};
 use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
 
 use crate::components as ui;
+use crate::config::{Config, Mode};
 use crate::icons;
 use crate::theme as mt;
 use crate::views::{client, server};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Client,
-    Server,
-}
 
 #[derive(Debug, Clone)]
 pub enum Message {
     SwitchMode(Mode),
     ShowAbout,
+    OpenUrl(String),
     Client(client::Message),
     Server(server::Message),
     StartResize,
@@ -32,18 +28,39 @@ pub struct Spud {
 
 impl Default for Spud {
     fn default() -> Self {
+        let config = Config::load();
         Self {
-            mode: Mode::Client,
+            mode: config.mode,
             showing_about: false,
-            client: client::State::default(),
-            server: server::State::default(),
+            client: client::State::from_config(&config.client),
+            server: server::State::from_config(&config.server),
             window_size: Size::new(1000.0, 650.0),
         }
     }
 }
 
 impl Spud {
+    fn current_config(&self) -> Config {
+        Config {
+            mode: self.mode,
+            client: self.client.to_config(),
+            server: self.server.to_config(),
+        }
+    }
+}
+
+impl Spud {
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let before = self.current_config();
+        let task = self.handle(message);
+        let after = self.current_config();
+        if before != after {
+            after.save();
+        }
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SwitchMode(mode) => {
                 self.mode = mode;
@@ -51,6 +68,10 @@ impl Spud {
             }
             Message::ShowAbout => {
                 self.showing_about = true;
+                Task::none()
+            }
+            Message::OpenUrl(url) => {
+                let _ = open::that(url);
                 Task::none()
             }
             Message::Client(msg) => {
@@ -143,7 +164,7 @@ impl Spud {
 
         // Content area
         let content: Element<Message> = if self.showing_about {
-            ui::about_page()
+            ui::about_page(Message::OpenUrl)
         } else {
             match self.mode {
                 Mode::Client => self

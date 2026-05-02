@@ -3,6 +3,7 @@ use iced::widget::{checkbox, column, container, pick_list, row, slider, text, te
 use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
 
 use crate::components as ui;
+use crate::config::{hash_passphrase, CaptureMode, ClientConfig};
 use crate::icons;
 use crate::theme as mt;
 
@@ -36,31 +37,11 @@ impl Page {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptureMode {
-    Hotkey,
-    Always,
-    EdgeOfScreen,
-}
-
-impl CaptureMode {
-    const ALL: [CaptureMode; 3] = [
-        CaptureMode::Hotkey,
-        CaptureMode::Always,
-        CaptureMode::EdgeOfScreen,
-    ];
-}
-
-impl std::fmt::Display for CaptureMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            CaptureMode::Hotkey => "When hotkey is held",
-            CaptureMode::Always => "Always capture",
-            CaptureMode::EdgeOfScreen => "When pointer hits edge",
-        };
-        f.write_str(s)
-    }
-}
+const CAPTURE_MODES: [CaptureMode; 3] = [
+    CaptureMode::Hotkey,
+    CaptureMode::Always,
+    CaptureMode::EdgeOfScreen,
+];
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredServer {
@@ -122,6 +103,7 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
+    passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
@@ -129,20 +111,45 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
+        Self::from_config(&ClientConfig::default())
+    }
+}
+
+impl State {
+    pub fn from_config(cfg: &ClientConfig) -> Self {
         Self {
             page: Page::Connection,
-            host: String::new(),
-            port: "7878".to_string(),
+            host: cfg.host.clone(),
+            port: cfg.port.clone(),
             connected: false,
-            sensitivity: 1.0,
-            natural_scroll: false,
-            capture_mode: CaptureMode::Hotkey,
-            hotkey: "Ctrl+Alt+Space".to_string(),
-            require_auth: true,
+            sensitivity: cfg.sensitivity.parse().unwrap_or(1.0),
+            natural_scroll: cfg.natural_scroll,
+            capture_mode: cfg.capture_mode,
+            hotkey: cfg.hotkey.clone(),
+            require_auth: cfg.require_auth,
             passphrase: String::new(),
+            passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: example_servers(),
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
+        }
+    }
+
+    pub fn to_config(&self) -> ClientConfig {
+        let passphrase_hash = if self.passphrase.is_empty() {
+            self.passphrase_hash.clone()
+        } else {
+            hash_passphrase(&self.passphrase)
+        };
+        ClientConfig {
+            host: self.host.clone(),
+            port: self.port.clone(),
+            sensitivity: format!("{:.2}", self.sensitivity),
+            natural_scroll: self.natural_scroll,
+            capture_mode: self.capture_mode,
+            hotkey: self.hotkey.clone(),
+            require_auth: self.require_auth,
+            passphrase_hash,
         }
     }
 }
@@ -421,7 +428,7 @@ impl State {
                 ui::helper_text("Decide when input is captured and forwarded."),
                 ui::v_space(16.0),
                 pick_list(
-                    CaptureMode::ALL,
+                    CAPTURE_MODES,
                     Some(self.capture_mode),
                     Message::CaptureModeChanged,
                 )
@@ -545,20 +552,57 @@ impl State {
             .align_y(iced::Alignment::Center),
         );
 
-        let passphrase_card = ui::card(
-            column![
-                text("Passphrase").size(16).color(mt::ON_SURFACE),
-                ui::v_space(4.0),
-                ui::helper_text("Must match the passphrase set on the server."),
-                ui::v_space(16.0),
-                text_input("Enter passphrase", &self.passphrase)
-                    .on_input(Message::PassphraseChanged)
-                    .secure(true)
-                    .padding(12)
-                    .size(14),
-            ]
-            .spacing(0),
-        );
+        let mut passphrase_items: Vec<Element<Message>> = vec![
+            text("Passphrase").size(16).color(mt::ON_SURFACE).into(),
+            ui::v_space(4.0).into(),
+            ui::helper_text("Must match the passphrase set on the server.").into(),
+            ui::v_space(16.0).into(),
+            text_input("Enter passphrase", &self.passphrase)
+                .on_input(Message::PassphraseChanged)
+                .secure(true)
+                .padding(12)
+                .size(14)
+                .into(),
+        ];
+
+        if self.passphrase.is_empty() {
+            passphrase_items.push(ui::v_space(8.0).into());
+            if self.passphrase_hash.is_empty() {
+                if self.require_auth {
+                    passphrase_items.push(
+                        row![
+                            text(icons::TRIANGLE_EXCLAMATION)
+                                .font(icons::FA_SOLID)
+                                .size(11)
+                                .color(mt::WARNING),
+                            text("A passphrase is required when authentication is enabled.")
+                                .size(12)
+                                .color(mt::WARNING),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    );
+                }
+            } else {
+                passphrase_items.push(
+                    row![
+                        text(icons::LOCK)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::SUCCESS),
+                        text("Passphrase is set. Type to change.")
+                            .size(12)
+                            .color(mt::SUCCESS),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            }
+        }
+
+        let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)

@@ -2,6 +2,7 @@ use iced::widget::{checkbox, column, row, text, text_input};
 use iced::{Element, Length};
 
 use crate::components as ui;
+use crate::config::{hash_passphrase, ServerConfig, ServerIcon};
 use crate::icons;
 use crate::theme as mt;
 
@@ -43,28 +44,19 @@ pub enum Message {
     DiscoverableToggled(bool),
     RequireAuthToggled(bool),
     PassphraseChanged(String),
-    IconChanged(char),
+    IconChanged(ServerIcon),
     NameChanged(String),
 }
 
-pub const ICON_CHOICES: [char; 3] = [icons::DESKTOP, icons::LAPTOP, icons::SERVER];
-
 #[derive(Clone, PartialEq)]
-struct ServerConfig {
+struct RunningConfig {
     bind_address: String,
     port: String,
     discoverable: bool,
     require_auth: bool,
-    passphrase: String,
+    passphrase_hash: String,
     name: String,
-    icon: char,
-}
-
-fn default_hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "spud-server".to_string())
+    icon: ServerIcon,
 }
 
 pub struct State {
@@ -75,36 +67,66 @@ pub struct State {
     discoverable: bool,
     require_auth: bool,
     passphrase: String,
-    icon: char,
+    passphrase_hash: String,
+    icon: ServerIcon,
     name: String,
-    active_config: Option<ServerConfig>,
+    active_config: Option<RunningConfig>,
 }
 
 impl Default for State {
     fn default() -> Self {
+        Self::from_config(&ServerConfig::default())
+    }
+}
+
+impl State {
+    pub fn from_config(cfg: &ServerConfig) -> Self {
         Self {
             page: Page::Status,
             running: false,
-            bind_address: "0.0.0.0".to_string(),
-            port: "7878".to_string(),
-            discoverable: true,
-            require_auth: true,
+            bind_address: cfg.bind_address.clone(),
+            port: cfg.port.clone(),
+            discoverable: cfg.discoverable,
+            require_auth: cfg.require_auth,
             passphrase: String::new(),
-            icon: icons::DESKTOP,
-            name: default_hostname(),
+            passphrase_hash: cfg.passphrase_hash.clone(),
+            icon: cfg.icon,
+            name: cfg.name.clone(),
             active_config: None,
+        }
+    }
+
+    pub fn to_config(&self) -> ServerConfig {
+        let passphrase_hash = if self.passphrase.is_empty() {
+            self.passphrase_hash.clone()
+        } else {
+            hash_passphrase(&self.passphrase)
+        };
+        ServerConfig {
+            name: self.name.clone(),
+            icon: self.icon,
+            bind_address: self.bind_address.clone(),
+            port: self.port.clone(),
+            discoverable: self.discoverable,
+            require_auth: self.require_auth,
+            passphrase_hash,
         }
     }
 }
 
 impl State {
-    fn snapshot(&self) -> ServerConfig {
-        ServerConfig {
+    fn snapshot(&self) -> RunningConfig {
+        let passphrase_hash = if self.passphrase.is_empty() {
+            self.passphrase_hash.clone()
+        } else {
+            hash_passphrase(&self.passphrase)
+        };
+        RunningConfig {
             bind_address: self.bind_address.clone(),
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase: self.passphrase.clone(),
+            passphrase_hash,
             name: self.name.clone(),
             icon: self.icon,
         }
@@ -184,10 +206,13 @@ impl State {
             ("Stopped", mt::ON_SURFACE_VARIANT, icons::TRIANGLE_EXCLAMATION)
         };
 
+        let passphrase_missing =
+            self.require_auth && self.passphrase.is_empty() && self.passphrase_hash.is_empty();
+
         let action: Element<Message> = if self.running {
             ui::outlined_button("Stop server", Message::StopServer)
         } else {
-            ui::filled_button("Start server", Some(Message::StartServer))
+            ui::filled_button("Start server", (!passphrase_missing).then_some(Message::StartServer))
         };
 
         let endpoint = self.active_config.as_ref().map_or_else(
@@ -241,7 +266,25 @@ impl State {
             );
         }
 
-        if self.settings_changed() {
+        if passphrase_missing {
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(ui::divider().into());
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::WARNING),
+                    text("Set a passphrase in Security settings before starting the server.")
+                        .size(13)
+                        .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        } else if self.settings_changed() {
             col_items.push(ui::v_space(12.0).into());
             col_items.push(ui::divider().into());
             col_items.push(ui::v_space(12.0).into());
@@ -286,10 +329,12 @@ impl State {
         .spacing(6);
 
         let icon_picker_row = row(
-            ICON_CHOICES
+            ServerIcon::ALL
                 .iter()
                 .copied()
-                .map(|c| ui::icon_pick(c, c == self.icon, Message::IconChanged(c)))
+                .map(|ic| {
+                    ui::icon_pick(ic.glyph(), ic == self.icon, Message::IconChanged(ic))
+                })
                 .collect::<Vec<_>>(),
         )
         .spacing(10);
@@ -367,20 +412,58 @@ impl State {
             .align_y(iced::Alignment::Center),
         );
 
-        let passphrase_card = ui::card(
-            column![
-                text("Passphrase").size(16).color(mt::ON_SURFACE),
-                ui::v_space(4.0),
-                ui::helper_text("Shared secret required when authentication is enabled."),
-                ui::v_space(16.0),
-                text_input("Set a passphrase", &self.passphrase)
-                    .on_input(Message::PassphraseChanged)
-                    .secure(true)
-                    .padding(12)
-                    .size(14),
-            ]
-            .spacing(0),
-        );
+        let mut passphrase_items: Vec<Element<Message>> = vec![
+            text("Passphrase").size(16).color(mt::ON_SURFACE).into(),
+            ui::v_space(4.0).into(),
+            ui::helper_text("Shared secret required when authentication is enabled.")
+                .into(),
+            ui::v_space(16.0).into(),
+            text_input("Set a passphrase", &self.passphrase)
+                .on_input(Message::PassphraseChanged)
+                .secure(true)
+                .padding(12)
+                .size(14)
+                .into(),
+        ];
+
+        if self.passphrase.is_empty() {
+            passphrase_items.push(ui::v_space(8.0).into());
+            if self.passphrase_hash.is_empty() {
+                if self.require_auth {
+                    passphrase_items.push(
+                        row![
+                            text(icons::TRIANGLE_EXCLAMATION)
+                                .font(icons::FA_SOLID)
+                                .size(11)
+                                .color(mt::WARNING),
+                            text("A passphrase is required when authentication is enabled.")
+                                .size(12)
+                                .color(mt::WARNING),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    );
+                }
+            } else {
+                passphrase_items.push(
+                    row![
+                        text(icons::LOCK)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::SUCCESS),
+                        text("Passphrase is set. Type to change.")
+                            .size(12)
+                            .color(mt::SUCCESS),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            }
+        }
+
+        let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
