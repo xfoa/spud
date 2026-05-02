@@ -179,20 +179,20 @@ pub fn outlined_button<'a, Message: 'a + Clone>(
     on_press: Message,
 ) -> Element<'a, Message> {
     button(
-        container(text(label).size(14).color(mt::PRIMARY))
+        container(text(label).size(14).color(mt::ON_SURFACE_VARIANT))
             .padding(Padding::from([10, 24])),
     )
     .on_press(on_press)
     .padding(0)
     .style(|_, status| {
         let bg = match status {
-            button::Status::Hovered => mt::with_alpha(mt::PRIMARY, 0.06),
-            button::Status::Pressed => mt::with_alpha(mt::PRIMARY, 0.12),
+            button::Status::Hovered => mt::with_alpha(mt::ON_SURFACE, 0.06),
+            button::Status::Pressed => mt::with_alpha(mt::ON_SURFACE, 0.12),
             _ => Color::TRANSPARENT,
         };
         button::Style {
             background: Some(Background::Color(bg)),
-            text_color: mt::PRIMARY,
+            text_color: mt::ON_SURFACE_VARIANT,
             border: Border {
                 color: mt::OUTLINE,
                 width: 1.0,
