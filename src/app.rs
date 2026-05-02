@@ -1,5 +1,5 @@
 use iced::widget::{column, container, row, scrollable, stack};
-use iced::{Background, Element, Length, Task, Theme};
+use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
 
 use crate::components as ui;
 use crate::icons;
@@ -19,6 +19,7 @@ pub enum Message {
     Client(client::Message),
     Server(server::Message),
     StartResize,
+    WindowResized(Size),
 }
 
 pub struct Spud {
@@ -26,6 +27,7 @@ pub struct Spud {
     showing_about: bool,
     client: client::State,
     server: server::State,
+    window_size: Size,
 }
 
 impl Default for Spud {
@@ -35,6 +37,7 @@ impl Default for Spud {
             showing_about: false,
             client: client::State::default(),
             server: server::State::default(),
+            window_size: Size::new(1000.0, 650.0),
         }
     }
 }
@@ -67,7 +70,15 @@ impl Spud {
             Message::StartResize => iced::window::latest().and_then(|id| {
                 iced::window::drag_resize(id, iced::window::Direction::SouthEast)
             }),
+            Message::WindowResized(size) => {
+                self.window_size = size;
+                Task::none()
+            }
         }
+    }
+
+    pub fn subscription(&self) -> Subscription<Message> {
+        iced::window::resize_events().map(|(_, size)| Message::WindowResized(size))
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -113,13 +124,23 @@ impl Spud {
 
         let sidebar = ui::sidebar(nav_col);
 
+        // Available width inside a card on the content page:
+        // window - sidebar(232) - page_body padding(32 each side) - card padding(20 each side)
+        let card_inner_width = (self.window_size.width - 232.0 - 64.0 - 40.0).max(0.0);
+
         // Content area
         let content: Element<Message> = if self.showing_about {
             ui::about_page()
         } else {
             match self.mode {
-                Mode::Client => self.client.view_content().map(Message::Client),
-                Mode::Server => self.server.view_content().map(Message::Server),
+                Mode::Client => self
+                    .client
+                    .view_content(card_inner_width)
+                    .map(Message::Client),
+                Mode::Server => self
+                    .server
+                    .view_content(card_inner_width)
+                    .map(Message::Server),
             }
         };
 

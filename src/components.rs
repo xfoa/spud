@@ -126,19 +126,27 @@ pub fn nav_item<'a, Message: 'a + Clone>(
 
 pub fn filled_button<'a, Message: 'a + Clone>(
     label: &'a str,
-    on_press: Message,
+    on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    button(
-        container(text(label).size(14).color(mt::ON_PRIMARY))
-            .padding(Padding::from([10, 24])),
+    let disabled = on_press.is_none();
+    let mut btn = button(
+        container(text(label).size(14).color(if disabled {
+            mt::with_alpha(mt::ON_PRIMARY, 0.4)
+        } else {
+            mt::ON_PRIMARY
+        }))
+        .padding(Padding::from([10, 24])),
     )
-    .on_press(on_press)
     .padding(0)
-    .style(|_, status| {
-        let bg = match status {
-            button::Status::Hovered => darken(mt::PRIMARY, 0.05),
-            button::Status::Pressed => darken(mt::PRIMARY, 0.10),
-            _ => mt::PRIMARY,
+    .style(move |_, status| {
+        let bg = if disabled {
+            mt::with_alpha(mt::ON_SURFACE, 0.12)
+        } else {
+            match status {
+                button::Status::Hovered => darken(mt::PRIMARY, 0.05),
+                button::Status::Pressed => darken(mt::PRIMARY, 0.10),
+                _ => mt::PRIMARY,
+            }
         };
         button::Style {
             background: Some(Background::Color(bg)),
@@ -147,15 +155,22 @@ pub fn filled_button<'a, Message: 'a + Clone>(
                 radius: 999.0.into(),
                 ..Default::default()
             },
-            shadow: Shadow {
-                color: mt::with_alpha(Color::BLACK, 0.15),
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
+            shadow: if disabled {
+                Shadow::default()
+            } else {
+                Shadow {
+                    color: mt::with_alpha(Color::BLACK, 0.15),
+                    offset: Vector::new(0.0, 1.0),
+                    blur_radius: 2.0,
+                }
             },
             ..Default::default()
         }
-    })
-    .into()
+    });
+    if let Some(msg) = on_press {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
 }
 
 pub fn outlined_button<'a, Message: 'a + Clone>(
@@ -211,6 +226,115 @@ pub fn card<'a, Message: 'a>(
             ..Default::default()
         })
         .into()
+}
+
+pub fn server_tile<'a, Message: 'a + Clone>(
+    icon: char,
+    name: &'a str,
+    address: &'a str,
+    selected: bool,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let icon_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::PRIMARY };
+    let name_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::ON_SURFACE };
+
+    let content = column![
+        text(icon).font(crate::icons::FA_SOLID).size(38).color(icon_color),
+        v_space(10.0),
+        text(name).size(14).color(name_color),
+        text(address).size(11).color(mt::ON_SURFACE_VARIANT),
+    ]
+    .spacing(2)
+    .align_x(iced::Alignment::Center);
+
+    let inner = container(content)
+        .padding(16)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill);
+
+    let mut btn = button(inner)
+        .padding(0)
+        .width(Length::Fixed(150.0))
+        .height(Length::Fixed(130.0))
+        .style(move |_, status| {
+            let base_bg = if selected { mt::PRIMARY_CONTAINER } else { mt::SURFACE };
+            let bg = match status {
+                button::Status::Hovered => {
+                    if selected {
+                        mt::PRIMARY_CONTAINER
+                    } else {
+                        mt::with_alpha(mt::PRIMARY, 0.06)
+                    }
+                }
+                button::Status::Pressed => mt::with_alpha(mt::PRIMARY, 0.12),
+                _ => base_bg,
+            };
+            let border_color = if selected { mt::PRIMARY } else { mt::OUTLINE_VARIANT };
+            let border_width = if selected { 1.5 } else { 1.0 };
+            button::Style {
+                background: Some(Background::Color(bg)),
+                text_color: mt::ON_SURFACE,
+                border: Border {
+                    color: border_color,
+                    width: border_width,
+                    radius: 12.0.into(),
+                },
+                shadow: Shadow::default(),
+                ..Default::default()
+            }
+        });
+    if let Some(msg) = on_press {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
+}
+
+pub fn icon_pick<'a, Message: 'a + Clone>(
+    icon: char,
+    selected: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    let icon_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::ON_SURFACE };
+
+    button(
+        container(text(icon).font(crate::icons::FA_SOLID).size(24).color(icon_color))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .on_press(on_press)
+    .padding(0)
+    .width(Length::Fixed(56.0))
+    .height(Length::Fixed(56.0))
+    .style(move |_, status| {
+        let base_bg = if selected { mt::PRIMARY_CONTAINER } else { mt::SURFACE };
+        let bg = match status {
+            button::Status::Hovered => {
+                if selected {
+                    mt::PRIMARY_CONTAINER
+                } else {
+                    mt::with_alpha(mt::PRIMARY, 0.06)
+                }
+            }
+            button::Status::Pressed => mt::with_alpha(mt::PRIMARY, 0.12),
+            _ => base_bg,
+        };
+        let border_color = if selected { mt::PRIMARY } else { mt::OUTLINE_VARIANT };
+        let border_width = if selected { 1.5 } else { 1.0 };
+        button::Style {
+            background: Some(Background::Color(bg)),
+            text_color: mt::ON_SURFACE,
+            border: Border {
+                color: border_color,
+                width: border_width,
+                radius: 10.0.into(),
+            },
+            shadow: Shadow::default(),
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 pub fn section_title<'a, Message: 'a>(label: &'a str) -> Element<'a, Message> {

@@ -8,6 +8,7 @@ fn main() -> iced::Result {
     iced::application(app::Spud::default, app::Spud::update, app::Spud::view)
         .title("Spud")
         .theme(app::Spud::theme)
+        .subscription(app::Spud::subscription)
         .font(icons::FA_SOLID_BYTES)
         .window_size(iced::Size::new(1000.0, 650.0))
         .window(iced::window::Settings {
