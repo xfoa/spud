@@ -1,5 +1,5 @@
 use iced::keyboard::{Key, Modifiers};
-use iced::widget::{checkbox, column, container, pick_list, row, slider, text, text_input};
+use iced::widget::{checkbox, column, container, row, slider, text, text_input};
 use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
 
 use crate::components as ui;
@@ -37,10 +37,9 @@ impl Page {
     }
 }
 
-const CAPTURE_MODES: [CaptureMode; 3] = [
+const CAPTURE_MODES: [CaptureMode; 2] = [
     CaptureMode::Hotkey,
-    CaptureMode::Always,
-    CaptureMode::EdgeOfScreen,
+    CaptureMode::Focus,
 ];
 
 #[derive(Debug, Clone)]
@@ -427,13 +426,11 @@ impl State {
                 ui::v_space(4.0),
                 ui::helper_text("Decide when input is captured and forwarded."),
                 ui::v_space(16.0),
-                pick_list(
+                ui::pick_list(
                     CAPTURE_MODES,
                     Some(self.capture_mode),
                     Message::CaptureModeChanged,
                 )
-                .padding(10)
-                .width(Length::Fill),
             ]
             .spacing(0),
         );

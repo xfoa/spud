@@ -1,7 +1,13 @@
+use std::sync::LazyLock;
+
 use iced::widget::{button, column, container, image, mouse_area, row, text, Space};
 use iced::{font, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
 use crate::theme as mt;
+
+static ABOUT_ICON: LazyLock<image::Handle> = LazyLock::new(|| {
+    image::Handle::from_bytes(include_bytes!("../resources/icon.png").as_slice())
+});
 
 pub fn v_space(h: f32) -> Space {
     Space::new().height(Length::Fixed(h))
@@ -203,6 +209,52 @@ pub fn outlined_button<'a, Message: 'a + Clone>(
         }
     })
     .into()
+}
+
+pub fn pick_list<'a, T, L, V, Message>(
+    options: L,
+    selected: Option<V>,
+    on_select: impl Fn(T) -> Message + 'a,
+) -> Element<'a, Message>
+where
+    T: ToString + PartialEq + Clone + 'a,
+    L: std::borrow::Borrow<[T]> + 'a,
+    V: std::borrow::Borrow<T> + 'a,
+    Message: 'a + Clone,
+{
+    use iced::overlay::menu;
+    use iced::widget::pick_list::{self as pl, Status};
+
+    iced::widget::pick_list(options, selected, on_select)
+        .style(|_, status| pl::Style {
+            text_color: mt::ON_SURFACE,
+            placeholder_color: mt::ON_SURFACE_VARIANT,
+            handle_color: mt::ON_SURFACE_VARIANT,
+            background: mt::SURFACE.into(),
+            border: Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: match status {
+                    Status::Active => mt::OUTLINE_VARIANT,
+                    _ => mt::PRIMARY,
+                },
+            },
+        })
+        .menu_style(|_| menu::Style {
+            background: mt::SURFACE.into(),
+            border: Border {
+                radius: 2.0.into(),
+                width: 1.0,
+                color: mt::OUTLINE_VARIANT,
+            },
+            text_color: mt::ON_SURFACE,
+            selected_text_color: mt::ON_PRIMARY_CONTAINER,
+            selected_background: mt::PRIMARY_CONTAINER.into(),
+            shadow: Shadow::default(),
+        })
+        .padding(10)
+        .width(Length::Fill)
+        .into()
 }
 
 pub fn card<'a, Message: 'a>(
@@ -424,9 +476,7 @@ pub fn corner_handle<'a, Message: 'a + Clone>(on_press: Message) -> Element<'a, 
 }
 
 pub fn about_page<'a, Message: 'a + Clone>(on_url_press: impl Fn(String) -> Message + 'a) -> Element<'a, Message> {
-    let icon = image(image::Handle::from_bytes(
-        include_bytes!("../resources/icon.png").as_slice(),
-    ));
+    let icon = image(ABOUT_ICON.clone());
 
     let body = card(
         column![
