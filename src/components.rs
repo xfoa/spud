@@ -1,5 +1,7 @@
 use std::sync::LazyLock;
 
+use iced::widget::text::Wrapping;
+use iced::widget::tooltip;
 use iced::widget::{button, column, container, image, mouse_area, row, text, Space};
 use iced::{font, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
@@ -291,13 +293,28 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     let icon_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::PRIMARY };
     let name_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::ON_SURFACE };
 
+    let (name_display, name_truncated) = truncate(name, 18);
+    let (address_display, address_truncated) = truncate(address, 22);
+    let any_truncated = name_truncated || address_truncated;
+
     let content = column![
         text(icon).font(crate::icons::FA_SOLID).size(38).color(icon_color),
         v_space(10.0),
-        text(name).size(14).color(name_color),
-        text(address).size(11).color(mt::ON_SURFACE_VARIANT),
+        text(name_display)
+            .size(14)
+            .color(name_color)
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center)
+            .wrapping(Wrapping::None),
+        text(address_display)
+            .size(11)
+            .color(mt::ON_SURFACE_VARIANT)
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center)
+            .wrapping(Wrapping::None),
     ]
     .spacing(2)
+    .width(Length::Fill)
     .align_x(iced::Alignment::Center);
 
     let inner = container(content)
@@ -341,7 +358,45 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if let Some(msg) = on_press {
         btn = btn.on_press(msg);
     }
-    btn.into()
+    if !any_truncated {
+        return btn.into();
+    }
+    let tip = container(
+        column![
+            text(name.to_string()).size(13).color(mt::ON_SURFACE),
+            text(address.to_string())
+                .size(11)
+                .color(mt::ON_SURFACE_VARIANT),
+        ]
+        .spacing(2),
+    )
+    .padding(Padding::from([6, 10]))
+    .style(|_| container::Style {
+        background: Some(Background::Color(mt::SURFACE)),
+        border: Border {
+            color: mt::OUTLINE_VARIANT,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: Shadow {
+            color: mt::with_alpha(Color::BLACK, 0.18),
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
+        ..Default::default()
+    });
+    tooltip(btn, tip, tooltip::Position::Bottom)
+        .gap(6.0)
+        .into()
+}
+
+fn truncate(s: &str, max: usize) -> (String, bool) {
+    if s.chars().count() <= max {
+        (s.to_string(), false)
+    } else {
+        let head: String = s.chars().take(max.saturating_sub(3)).collect();
+        (format!("{head}..."), true)
+    }
 }
 
 pub fn icon_pick<'a, Message: 'a + Clone>(

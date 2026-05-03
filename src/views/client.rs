@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::{checkbox, column, container, row, slider, text, text_input};
-use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
+use iced::{Background, Border, Color, Element, Length, Padding, Point, Shadow, Vector};
 
 use crate::components as ui;
 use crate::config::{hash_passphrase, CaptureMode, ClientConfig};
@@ -64,6 +66,8 @@ pub enum Message {
     HotkeyInput(Key, Modifiers),
     Capture(iced::Event),
     HotkeyEvent(crate::input::InputEvent),
+    ConnectionLost,
+    HeartbeatTick,
 }
 
 pub struct State {
@@ -81,6 +85,10 @@ pub struct State {
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
+    sender: Option<crate::net::Sender>,
+    last_cursor: Option<Point>,
+    last_error: Option<String>,
+    pressed_keys: HashSet<String>,
 }
 
 impl Default for State {
@@ -106,6 +114,10 @@ impl State {
             discovered: Vec::new(),
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
+            sender: None,
+            last_cursor: None,
+            last_error: None,
+            pressed_keys: HashSet::new(),
         }
     }
 
@@ -138,8 +150,35 @@ impl State {
                     self.port = s;
                 }
             }
-            Message::Connect => self.connected = true,
-            Message::Disconnect => self.connected = false,
+            Message::Connect => {
+                let port = self.port.parse::<u16>().unwrap_or(7878);
+                self.last_error = None;
+                match crate::net::Sender::connect(&self.host, port) {
+                    Ok(s) => {
+                        self.sender = Some(s);
+                        self.connected = true;
+                    }
+                    Err(e) => {
+                        self.last_error = Some(format!("{e}"));
+                    }
+                }
+            }
+            Message::Disconnect => {
+                self.connected = false;
+                self.sender = None;
+                self.last_cursor = None;
+                self.last_error = None;
+                self.pressed_keys.clear();
+            }
+            Message::ConnectionLost => {
+                if self.connected {
+                    self.connected = false;
+                    self.sender = None;
+                    self.last_cursor = None;
+                    self.pressed_keys.clear();
+                    self.last_error = Some("Server closed the connection.".to_string());
+                }
+            }
             Message::SensitivityChanged(v) => self.sensitivity = v,
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
             Message::CaptureModeChanged(m) => self.capture_mode = m,
@@ -203,12 +242,29 @@ impl State {
                     CaptureMode::Focus => true,
                     CaptureMode::Hotkey => crate::input::is_wayland_grabbed(),
                 };
-                if forward && matches!(event, iced::Event::Keyboard(_) | iced::Event::Mouse(_)) {
-                    println!("[capture] {event:?}");
+                if forward {
+                    if let Some(wire) =
+                        iced_to_wire(&event, &mut self.last_cursor, &mut self.pressed_keys)
+                    {
+                        if let Some(sender) = &self.sender {
+                            sender.send(&wire);
+                        }
+                    }
                 }
             }
             Message::HotkeyEvent(event) => {
-                println!("[hotkey] {event:?}");
+                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
+                    if let Some(sender) = &self.sender {
+                        sender.send(&wire);
+                    }
+                }
+            }
+            Message::HeartbeatTick => {
+                if let Some(sender) = &self.sender {
+                    for name in &self.pressed_keys {
+                        sender.send(&crate::net::Event::KeyRepeat(name.clone()));
+                    }
+                }
             }
         }
     }
@@ -364,6 +420,24 @@ impl State {
                     text("Stop the server before connecting as a client.")
                         .size(13)
                         .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        if let Some(err) = &self.last_error {
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(ui::divider().into());
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::DANGER),
+                    text(err.as_str()).size(13).color(mt::DANGER),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center)
@@ -649,6 +723,116 @@ impl State {
 
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
+    }
+}
+
+fn iced_to_wire(
+    event: &iced::Event,
+    last_cursor: &mut Option<Point>,
+    pressed_keys: &mut HashSet<String>,
+) -> Option<crate::net::Event> {
+    use iced::keyboard;
+    use iced::mouse;
+
+    match event {
+        iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
+            let name = key_to_string(key);
+            if pressed_keys.insert(name.clone()) {
+                Some(crate::net::Event::KeyDown(name))
+            } else {
+                None
+            }
+        }
+        iced::Event::Keyboard(keyboard::Event::KeyReleased { key, .. }) => {
+            let name = key_to_string(key);
+            pressed_keys.remove(&name);
+            Some(crate::net::Event::KeyUp(name))
+        }
+        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+            let result = last_cursor.map(|prev| crate::net::Event::MouseMove {
+                dx: (position.x - prev.x).round() as i16,
+                dy: (position.y - prev.y).round() as i16,
+            });
+            *last_cursor = Some(*position);
+            result.filter(|e| !matches!(e, crate::net::Event::MouseMove { dx: 0, dy: 0 }))
+        }
+        iced::Event::Mouse(mouse::Event::CursorLeft) => {
+            *last_cursor = None;
+            None
+        }
+        iced::Event::Mouse(mouse::Event::ButtonPressed(b)) => Some(crate::net::Event::MouseButton {
+            button: map_iced_button(b),
+            pressed: true,
+        }),
+        iced::Event::Mouse(mouse::Event::ButtonReleased(b)) => {
+            Some(crate::net::Event::MouseButton {
+                button: map_iced_button(b),
+                pressed: false,
+            })
+        }
+        iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
+            let (x, y) = match delta {
+                mouse::ScrollDelta::Lines { x, y } => (x.round() as i32, y.round() as i32),
+                mouse::ScrollDelta::Pixels { x, y } => {
+                    ((x / 10.0).round() as i32, (y / 10.0).round() as i32)
+                }
+            };
+            let dx = x.clamp(-127, 127) as i8;
+            let dy = y.clamp(-127, 127) as i8;
+            (dx != 0 || dy != 0).then_some(crate::net::Event::Wheel { dx, dy })
+        }
+        _ => None,
+    }
+}
+
+fn input_event_to_wire(
+    event: &crate::input::InputEvent,
+    pressed_keys: &mut HashSet<String>,
+) -> Option<crate::net::Event> {
+    use crate::input::InputEvent;
+    match event {
+        InputEvent::KeyPress { keycode } => {
+            let name = format!("evdev:{keycode}");
+            if pressed_keys.insert(name.clone()) {
+                Some(crate::net::Event::KeyDown(name))
+            } else {
+                None
+            }
+        }
+        InputEvent::KeyRelease { keycode } => {
+            let name = format!("evdev:{keycode}");
+            pressed_keys.remove(&name);
+            Some(crate::net::Event::KeyUp(name))
+        }
+        InputEvent::MouseMove { dx, dy } => Some(crate::net::Event::MouseMove {
+            dx: *dx,
+            dy: *dy,
+        }),
+        InputEvent::MouseButton { button, pressed } => Some(crate::net::Event::MouseButton {
+            button: *button,
+            pressed: *pressed,
+        }),
+        InputEvent::HotkeyToggled { .. } | InputEvent::BackendError(_) => None,
+    }
+}
+
+fn key_to_string(key: &Key) -> String {
+    match key {
+        Key::Character(s) => s.to_string(),
+        Key::Named(n) => format!("{n:?}"),
+        Key::Unidentified => "Unidentified".to_string(),
+    }
+}
+
+fn map_iced_button(b: &iced::mouse::Button) -> u8 {
+    use iced::mouse::Button;
+    match b {
+        Button::Left => 1,
+        Button::Right => 3,
+        Button::Middle => 2,
+        Button::Back => 8,
+        Button::Forward => 9,
+        Button::Other(n) => (*n).min(255) as u8,
     }
 }
 

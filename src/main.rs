@@ -6,6 +6,7 @@ mod config;
 mod discovery;
 mod icons;
 mod input;
+mod net;
 mod theme;
 mod views;
 

@@ -72,6 +72,8 @@ pub struct State {
     name: String,
     active_config: Option<RunningConfig>,
     registration: Option<crate::discovery::Registration>,
+    listener: Option<crate::net::Listener>,
+    last_error: Option<String>,
 }
 
 impl Default for State {
@@ -95,6 +97,8 @@ impl State {
             name: cfg.name.clone(),
             active_config: None,
             registration: None,
+            listener: None,
+            last_error: None,
         }
     }
 
@@ -156,26 +160,56 @@ impl State {
             self.registration = crate::discovery::Registration::new(&self.name, port, self.icon);
         }
     }
+
+    fn start_listener(&mut self) -> std::io::Result<()> {
+        self.listener = None;
+        let port = self.port.parse::<u16>().unwrap_or(7878);
+        let addr = if self.bind_address.is_empty() {
+            "0.0.0.0"
+        } else {
+            self.bind_address.as_str()
+        };
+        let listener = crate::net::Listener::bind(addr, port)?;
+        self.listener = Some(listener);
+        Ok(())
+    }
 }
 
 impl State {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::SelectPage(p) => self.page = p,
-            Message::StartServer => {
-                self.running = true;
-                self.active_config = Some(self.snapshot());
-                self.refresh_registration();
-            }
+            Message::StartServer => match self.start_listener() {
+                Ok(()) => {
+                    self.running = true;
+                    self.active_config = Some(self.snapshot());
+                    self.refresh_registration();
+                    self.last_error = None;
+                }
+                Err(e) => {
+                    self.last_error = Some(format!("{e}"));
+                }
+            },
             Message::StopServer => {
                 self.running = false;
                 self.active_config = None;
                 self.registration = None;
+                self.listener = None;
+                self.last_error = None;
             }
-            Message::RestartServer => {
-                self.active_config = Some(self.snapshot());
-                self.refresh_registration();
-            }
+            Message::RestartServer => match self.start_listener() {
+                Ok(()) => {
+                    self.active_config = Some(self.snapshot());
+                    self.refresh_registration();
+                    self.last_error = None;
+                }
+                Err(e) => {
+                    self.running = false;
+                    self.active_config = None;
+                    self.registration = None;
+                    self.last_error = Some(format!("{e}"));
+                }
+            },
             Message::BindAddressChanged(s) => self.bind_address = s,
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
@@ -343,6 +377,24 @@ impl State {
                     text("Settings have changed - restart the server to apply them.")
                         .size(13)
                         .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        if let Some(err) = &self.last_error {
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(ui::divider().into());
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::DANGER),
+                    text(err.as_str()).size(13).color(mt::DANGER),
                 ]
                 .spacing(8)
                 .align_y(iced::Alignment::Center)

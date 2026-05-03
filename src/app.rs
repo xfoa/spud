@@ -15,6 +15,14 @@ fn build_discovery_stream(_: &()) -> impl Stream<Item = Message> + 'static {
         .map(|event| Message::Client(client::Message::DiscoveryEvent(event)))
 }
 
+fn build_net_events_stream(_: &()) -> impl Stream<Item = Message> + 'static {
+    crate::net::events().map(|event| match event {
+        crate::net::NetEvent::Disconnected => {
+            Message::Client(client::Message::ConnectionLost)
+        }
+    })
+}
+
 fn build_hotkey_stream(hotkey: &String) -> impl Stream<Item = Message> + 'static {
     crate::input::listen(hotkey.clone())
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
@@ -38,6 +46,7 @@ pub enum Message {
     WindowResized(Size),
     WindowOpened(iced::window::Id),
     WaylandHandlesReady(Option<WaylandHandles>),
+    Quit,
 }
 
 pub struct Spud {
@@ -138,6 +147,14 @@ impl Spud {
                 self.wayland_handles = handles;
                 Task::none()
             }
+            Message::Quit => {
+                let ungrabbed_hotkey = self.client.is_capturing_hotkey()
+                    && !crate::input::is_wayland_grabbed();
+                if !self.client.is_connected() || ungrabbed_hotkey {
+                    return iced::exit();
+                }
+                Task::none()
+            }
         }
     }
 
@@ -150,6 +167,22 @@ impl Spud {
         }
 
         subs.push(Subscription::run_with((), build_discovery_stream));
+        subs.push(Subscription::run_with((), build_net_events_stream));
+
+        if self.client.is_connected() {
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(500))
+                    .map(|_| Message::Client(client::Message::HeartbeatTick)),
+            );
+        }
+        subs.push(iced::keyboard::listen().filter_map(|event| {
+            if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = event {
+                if modifiers.control() && key == iced::keyboard::Key::Character("q".into()) {
+                    return Some(Message::Quit);
+                }
+            }
+            None
+        }));
 
         if self.mode == Mode::Client && self.client.hotkey_dialog_open {
             let keys = iced::keyboard::listen().filter_map(|event| {
