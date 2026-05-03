@@ -10,6 +10,11 @@ use crate::input::WaylandHandles;
 use crate::theme as mt;
 use crate::views::{client, server};
 
+fn build_discovery_stream(_: &()) -> impl Stream<Item = Message> + 'static {
+    crate::discovery::browse()
+        .map(|event| Message::Client(client::Message::DiscoveryEvent(event)))
+}
+
 fn build_hotkey_stream(hotkey: &String) -> impl Stream<Item = Message> + 'static {
     crate::input::listen(hotkey.clone())
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
@@ -99,6 +104,11 @@ impl Spud {
                 if matches!(msg, client::Message::SelectPage(_)) {
                     self.showing_about = false;
                 }
+                if let client::Message::DiscoveryEvent(crate::discovery::Event::Found(ref s)) = msg {
+                    if self.server.owns_fullname(&s.fullname) {
+                        return Task::none();
+                    }
+                }
                 self.client.update(msg);
                 Task::none()
             }
@@ -138,6 +148,8 @@ impl Spud {
         if !self.handles_attempted {
             subs.push(iced::window::open_events().map(Message::WindowOpened));
         }
+
+        subs.push(Subscription::run_with((), build_discovery_stream));
 
         if self.mode == Mode::Client && self.client.hotkey_dialog_open {
             let keys = iced::keyboard::listen().filter_map(|event| {
@@ -224,11 +236,11 @@ impl Spud {
             match self.mode {
                 Mode::Client => self
                     .client
-                    .view_content(card_inner_width)
+                    .view_content(card_inner_width, self.server.is_running())
                     .map(Message::Client),
                 Mode::Server => self
                     .server
-                    .view_content(card_inner_width)
+                    .view_content(card_inner_width, self.client.is_connected())
                     .map(Message::Server),
             }
         };

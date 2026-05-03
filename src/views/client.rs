@@ -4,6 +4,7 @@ use iced::{Background, Border, Color, Element, Length, Padding, Shadow, Vector};
 
 use crate::components as ui;
 use crate::config::{hash_passphrase, CaptureMode, ClientConfig};
+use crate::discovery::{self, DiscoveredServer};
 use crate::icons;
 use crate::theme as mt;
 
@@ -42,35 +43,6 @@ const CAPTURE_MODES: [CaptureMode; 2] = [
     CaptureMode::Focus,
 ];
 
-#[derive(Debug, Clone)]
-pub struct DiscoveredServer {
-    pub name: String,
-    pub host: String,
-    pub port: String,
-    pub address: String,
-    pub icon: char,
-}
-
-impl DiscoveredServer {
-    fn new(name: &str, host: &str, port: &str, icon: char) -> Self {
-        Self {
-            name: name.to_string(),
-            host: host.to_string(),
-            port: port.to_string(),
-            address: format!("{}:{}", host, port),
-            icon,
-        }
-    }
-}
-
-fn example_servers() -> Vec<DiscoveredServer> {
-    vec![
-        DiscoveredServer::new("studio-mac", "studio-mac.local", "7878", icons::DESKTOP),
-        DiscoveredServer::new("thinkpad-x1", "thinkpad-x1.local", "7878", icons::LAPTOP),
-        DiscoveredServer::new("office-tower", "192.168.1.42", "7878", icons::DESKTOP),
-        DiscoveredServer::new("homelab", "homelab.local", "7878", icons::SERVER),
-    ]
-}
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -85,6 +57,7 @@ pub enum Message {
     RequireAuthToggled(bool),
     PassphraseChanged(String),
     SelectDiscovered(usize),
+    DiscoveryEvent(discovery::Event),
     OpenHotkeyDialog,
     CloseHotkeyDialog,
     ConfirmHotkey,
@@ -130,7 +103,7 @@ impl State {
             require_auth: cfg.require_auth,
             passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
-            discovered: example_servers(),
+            discovered: Vec::new(),
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
         }
@@ -178,6 +151,16 @@ impl State {
                     self.port = server.port.clone();
                 }
             }
+            Message::DiscoveryEvent(event) => match event {
+                discovery::Event::Found(server) => {
+                    self.discovered.retain(|s| s.fullname != server.fullname);
+                    self.discovered.push(server);
+                    self.discovered.sort_by(|a, b| a.name.cmp(&b.name));
+                }
+                discovery::Event::Lost(fullname) => {
+                    self.discovered.retain(|s| s.fullname != fullname);
+                }
+            },
             Message::OpenHotkeyDialog => {
                 self.hotkey_dialog_open = true;
                 self.pending_hotkey = String::new();
@@ -230,6 +213,10 @@ impl State {
         }
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+
     pub fn is_capturing_focused(&self) -> bool {
         self.connected && self.capture_mode == CaptureMode::Focus
     }
@@ -257,16 +244,16 @@ impl State {
             .collect()
     }
 
-    pub fn view_content(&self, content_width: f32) -> Element<'_, Message> {
+    pub fn view_content(&self, content_width: f32, server_running: bool) -> Element<'_, Message> {
         match self.page {
-            Page::Connection => self.connection_page(content_width),
+            Page::Connection => self.connection_page(content_width, server_running),
             Page::Mouse => self.input_page(),
             Page::Capture => self.hotkeys_page(),
             Page::Security => self.security_page(),
         }
     }
 
-    fn connection_page(&self, content_width: f32) -> Element<'_, Message> {
+    fn connection_page(&self, content_width: f32, server_running: bool) -> Element<'_, Message> {
         let status_label = if self.connected && !self.require_auth {
             "Connected (insecure)"
         } else if self.connected {
@@ -353,21 +340,41 @@ impl State {
         let action: Element<Message> = if self.connected {
             ui::outlined_button("Disconnect", Message::Disconnect)
         } else {
-            ui::filled_button("Connect", can_connect.then_some(Message::Connect))
+            ui::filled_button("Connect", (can_connect && !server_running).then_some(Message::Connect))
         };
 
-        let connection_card = ui::card(
-            column![
-                status_row,
-                ui::v_space(16.0),
-                host_field,
-                ui::v_space(12.0),
-                port_field,
-                ui::v_space(20.0),
-                row![ui::h_space_fill(), action].width(Length::Fill),
-            ]
-            .spacing(0),
-        );
+        let mut conn_items: Vec<Element<Message>> = vec![
+            status_row.into(),
+            ui::v_space(16.0).into(),
+            host_field,
+            ui::v_space(12.0).into(),
+            port_field,
+        ];
+
+        if server_running && !self.connected {
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(ui::divider().into());
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::WARNING),
+                    text("Stop the server before connecting as a client.")
+                        .size(13)
+                        .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        conn_items.push(ui::v_space(20.0).into());
+        conn_items.push(row![ui::h_space_fill(), action].width(Length::Fill).into());
+
+        let connection_card = ui::card(column(conn_items).spacing(0));
 
         let discovery_card = self.discovery_card(content_width);
 

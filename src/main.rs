@@ -3,6 +3,7 @@ use iced::window::settings::PlatformSpecific;
 mod app;
 mod components;
 mod config;
+mod discovery;
 mod icons;
 mod input;
 mod theme;

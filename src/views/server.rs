@@ -71,6 +71,7 @@ pub struct State {
     icon: ServerIcon,
     name: String,
     active_config: Option<RunningConfig>,
+    registration: Option<crate::discovery::Registration>,
 }
 
 impl Default for State {
@@ -93,6 +94,7 @@ impl State {
             icon: cfg.icon,
             name: cfg.name.clone(),
             active_config: None,
+            registration: None,
         }
     }
 
@@ -132,9 +134,27 @@ impl State {
         }
     }
 
+    pub fn is_running(&self) -> bool {
+        self.running
+    }
+
     fn settings_changed(&self) -> bool {
         self.running
             && self.active_config.as_ref().is_some_and(|c| *c != self.snapshot())
+    }
+
+    pub fn owns_fullname(&self, fullname: &str) -> bool {
+        self.registration
+            .as_ref()
+            .map_or(false, |r| r.fullname() == fullname)
+    }
+
+    fn refresh_registration(&mut self) {
+        self.registration = None;
+        if self.running && self.discoverable {
+            let port = self.port.parse::<u16>().unwrap_or(7878);
+            self.registration = crate::discovery::Registration::new(&self.name, port, self.icon);
+        }
     }
 }
 
@@ -145,13 +165,16 @@ impl State {
             Message::StartServer => {
                 self.running = true;
                 self.active_config = Some(self.snapshot());
+                self.refresh_registration();
             }
             Message::StopServer => {
                 self.running = false;
                 self.active_config = None;
+                self.registration = None;
             }
             Message::RestartServer => {
                 self.active_config = Some(self.snapshot());
+                self.refresh_registration();
             }
             Message::BindAddressChanged(s) => self.bind_address = s,
             Message::PortChanged(s) => {
@@ -159,7 +182,12 @@ impl State {
                     self.port = s;
                 }
             }
-            Message::DiscoverableToggled(v) => self.discoverable = v,
+            Message::DiscoverableToggled(v) => {
+                self.discoverable = v;
+                if self.running {
+                    self.refresh_registration();
+                }
+            }
             Message::RequireAuthToggled(v) => self.require_auth = v,
             Message::PassphraseChanged(s) => self.passphrase = s,
             Message::IconChanged(c) => self.icon = c,
@@ -182,15 +210,15 @@ impl State {
             .collect()
     }
 
-    pub fn view_content(&self, _content_width: f32) -> Element<'_, Message> {
+    pub fn view_content(&self, _content_width: f32, client_connected: bool) -> Element<'_, Message> {
         match self.page {
-            Page::Status => self.status_page(),
+            Page::Status => self.status_page(client_connected),
             Page::Network => self.network_page(),
             Page::Security => self.security_page(),
         }
     }
 
-    fn status_page(&self) -> Element<'_, Message> {
+    fn status_page(&self, client_connected: bool) -> Element<'_, Message> {
         let active_require_auth = self
             .active_config
             .as_ref()
@@ -212,7 +240,7 @@ impl State {
         let action: Element<Message> = if self.running {
             ui::outlined_button("Stop server", Message::StopServer)
         } else {
-            ui::filled_button("Start server", (!passphrase_missing).then_some(Message::StartServer))
+            ui::filled_button("Start server", (!passphrase_missing && !client_connected).then_some(Message::StartServer))
         };
 
         let endpoint = self.active_config.as_ref().map_or_else(
@@ -266,7 +294,25 @@ impl State {
             );
         }
 
-        if passphrase_missing {
+        if client_connected && !self.running {
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(ui::divider().into());
+            col_items.push(ui::v_space(12.0).into());
+            col_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::WARNING),
+                    text("Disconnect the client before starting the server.")
+                        .size(13)
+                        .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        } else if passphrase_missing {
             col_items.push(ui::v_space(12.0).into());
             col_items.push(ui::divider().into());
             col_items.push(ui::v_space(12.0).into());
