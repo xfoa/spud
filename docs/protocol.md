@@ -132,11 +132,15 @@ closes the TCP connection immediately after sending this message.
    * Otherwise, the client extracts the salt from the server's hash, computes
      `argon2(passphrase, salt)`, and sends `Auth`.
 5. Server verifies the `Auth` hash:
-   * If `require_auth` is disabled: server accepts any hash (or no `Auth`).
+   * If `require_auth` is disabled: server accepts any hash.
    * If `require_auth` is enabled and the hash matches: server sends
      `AuthAck` and records the peer IP.
    * If `require_auth` is enabled and the hash does not match: server sends
      `AuthFailed` and closes the connection.
+
+   The client always sends `Auth` regardless of whether the server has
+   authentication configured; the server simply skips verification when
+   `require_auth` is false.
 6. Client reads the server's reply. `AuthFailed` is reported as an authentication
    error in the UI.
 7. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
