@@ -75,6 +75,7 @@ pub enum Message {
     HeartbeatTick,
     KeepaliveTick,
     KeepaliveIntervalChanged(u16),
+    ReconnectTimeoutChanged(String),
 }
 
 pub struct State {
@@ -101,6 +102,7 @@ pub struct State {
     reconnecting: bool,
     reconnect_generation: u64,
     keepalive_interval_ms: u16,
+    reconnect_timeout_secs: String,
 }
 
 impl Default for State {
@@ -135,6 +137,7 @@ impl State {
             reconnecting: false,
             reconnect_generation: 0,
             keepalive_interval_ms: cfg.keepalive_interval_ms,
+            reconnect_timeout_secs: cfg.reconnect_timeout_secs.to_string(),
         }
     }
 
@@ -154,6 +157,7 @@ impl State {
             require_auth: self.require_auth,
             passphrase_hash,
             keepalive_interval_ms: self.keepalive_interval_ms,
+            reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
         }
     }
 }
@@ -341,6 +345,11 @@ impl State {
             Message::KeepaliveIntervalChanged(v) => {
                 self.keepalive_interval_ms = (v / 10) * 10;
             }
+            Message::ReconnectTimeoutChanged(s) => {
+                if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
+                    self.reconnect_timeout_secs = s;
+                }
+            }
         }
     }
 
@@ -362,6 +371,10 @@ impl State {
 
     pub fn keepalive_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(u64::from(self.keepalive_interval_ms))
+    }
+
+    pub fn reconnect_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.reconnect_timeout_secs.parse::<u16>().unwrap_or(30)))
     }
 
     pub fn is_reconnecting(&self) -> bool {
@@ -859,8 +872,22 @@ impl State {
         ]
         .spacing(6);
 
-        let keepalive_card = ui::card(column![keepalive_field].spacing(0));
-        let body = column![keepalive_card].spacing(0);
+        let timeout_field = column![
+            ui::field_label("Reconnect timeout (seconds)"),
+            text_input("30", &self.reconnect_timeout_secs)
+                .on_input(Message::ReconnectTimeoutChanged)
+                .padding(12)
+                .size(14)
+                .width(Length::Fixed(140.0)),
+            ui::v_space(4.0),
+            ui::helper_text("How long to keep trying to reconnect after the server drops."),
+        ]
+        .spacing(6);
+
+        let advanced_card = ui::card(
+            column![keepalive_field, ui::v_space(16.0), timeout_field].spacing(0),
+        );
+        let body = column![advanced_card].spacing(0);
         ui::page_body("Advanced", body)
     }
 }

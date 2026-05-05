@@ -35,10 +35,10 @@ fn build_wayland_hotkey_stream(
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
-async fn reconnect(host: String, port: u16) -> Result<crate::net::Sender, ()> {
+async fn reconnect(host: String, port: u16, timeout: std::time::Duration) -> Result<crate::net::Sender, ()> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
     std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
             match crate::net::Sender::connect(&host, port) {
                 Ok(sender) => {
@@ -144,7 +144,8 @@ impl Spud {
                     let host = self.client.host().to_string();
                     let port = self.client.port().parse().unwrap_or(7878);
                     let gen = self.client.reconnect_generation();
-                    return Task::perform(reconnect(host, port), move |result| match result {
+                    let timeout = self.client.reconnect_timeout();
+                    return Task::perform(reconnect(host, port, timeout), move |result| match result {
                         Ok(sender) => Message::Client(client::Message::ReconnectSuccess(sender, gen)),
                         Err(()) => Message::Client(client::Message::ReconnectFailed(gen)),
                     });

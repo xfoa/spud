@@ -107,6 +107,7 @@ pub struct ClientConfig {
     pub require_auth: bool,
     pub passphrase_hash: String,
     pub keepalive_interval_ms: u16,
+    pub reconnect_timeout_secs: u16,
 }
 
 impl Default for ClientConfig {
@@ -121,6 +122,7 @@ impl Default for ClientConfig {
             require_auth: true,
             passphrase_hash: String::new(),
             keepalive_interval_ms: 50,
+            reconnect_timeout_secs: 30,
         }
     }
 }
