@@ -1,16 +1,20 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
 use iced::futures::channel::mpsc as ifmpsc;
 use iced::futures::stream::Stream;
+use rand_core::OsRng;
+use rand_core::RngCore;
 
 pub const PROTOCOL_VERSION: u16 = 1;
-pub const FEATURES: u32 = 0;
+pub const FEATURE_ENCRYPT: u32 = 1 << 0;
 
 #[derive(Debug, Clone)]
 pub enum NetEvent {
@@ -59,6 +63,7 @@ const CTRL_HELLO_ACK: u8 = 0x02;
 const CTRL_AUTH_FAILED: u8 = 0x03;
 const CTRL_AUTH: u8 = 0x04;
 const CTRL_AUTH_ACK: u8 = 0x05;
+const CTRL_KEY_EXCHANGE: u8 = 0x06;
 
 impl Event {
     pub fn encode(&self, buf: &mut Vec<u8>) {
@@ -163,6 +168,30 @@ fn protocol_err(msg: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
+fn encrypt_packet(key: &[u8; 32], seq: u32, plaintext: &[u8]) -> Option<Vec<u8>> {
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+    let mut nonce_bytes = [0u8; 12];
+    nonce_bytes[..4].copy_from_slice(&seq.to_le_bytes());
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let mut ciphertext = cipher.encrypt(nonce, plaintext).ok()?;
+    let mut result = Vec::with_capacity(4 + ciphertext.len());
+    result.extend_from_slice(&seq.to_le_bytes());
+    result.append(&mut ciphertext);
+    Some(result)
+}
+
+fn decrypt_packet(key: &[u8; 32], buf: &[u8]) -> Option<Vec<u8>> {
+    if buf.len() < 4 {
+        return None;
+    }
+    let seq = u32::from_le_bytes(buf[..4].try_into().ok()?);
+    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
+    let mut nonce_bytes = [0u8; 12];
+    nonce_bytes[..4].copy_from_slice(&seq.to_le_bytes());
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    cipher.decrypt(nonce, &buf[4..]).ok()
+}
+
 #[derive(Clone, Debug)]
 pub struct Sender {
     udp_tx: mpsc::Sender<Vec<u8>>,
@@ -172,6 +201,9 @@ pub struct Sender {
     pub key_timeout_ms: u16,
     pub server_hash: String,
     pub client_hash: String,
+    encrypt: bool,
+    seq: Arc<AtomicU32>,
+    key: Option<[u8; 32]>,
 }
 
 impl Sender {
@@ -182,6 +214,7 @@ impl Sender {
         passphrase_changed: bool,
         require_auth: bool,
         stored_hash: &str,
+        encrypt: bool,
     ) -> io::Result<Self> {
         let addr = (host, port)
             .to_socket_addrs()?
@@ -191,11 +224,13 @@ impl Sender {
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
 
+        let client_features = if encrypt { FEATURE_ENCRYPT } else { 0 };
+
         // 1. Send Hello
         let mut hello = Vec::with_capacity(7);
         hello.push(CTRL_HELLO);
         hello.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
-        hello.extend_from_slice(&FEATURES.to_le_bytes());
+        hello.extend_from_slice(&client_features.to_le_bytes());
         write_frame(&mut tcp, &hello)?;
 
         // 2. Read HelloAck
@@ -238,6 +273,13 @@ impl Sender {
             ));
         }
 
+        if encrypt && negotiated_features & FEATURE_ENCRYPT == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Server does not support encryption",
+            ));
+        }
+
         // 3. Compute client hash
         let client_hash = if passphrase_changed {
             let pass = passphrase.ok_or_else(|| {
@@ -277,6 +319,20 @@ impl Sender {
             return Err(protocol_err("expected AuthAck"));
         }
 
+        // 6. Key exchange if encryption is negotiated
+        let negotiated_encrypt = negotiated_features & FEATURE_ENCRYPT != 0;
+        let key = if negotiated_encrypt {
+            let mut session_key = [0u8; 32];
+            OsRng.fill_bytes(&mut session_key);
+            let mut kx = Vec::with_capacity(33);
+            kx.push(CTRL_KEY_EXCHANGE);
+            kx.extend_from_slice(&session_key);
+            write_frame(&mut tcp, &kx)?;
+            Some(session_key)
+        } else {
+            None
+        };
+
         tcp.set_read_timeout(Some(Duration::from_millis(200)))?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -301,12 +357,24 @@ impl Sender {
             key_timeout_ms,
             server_hash,
             client_hash,
+            encrypt: negotiated_encrypt,
+            seq: Arc::new(AtomicU32::new(0)),
+            key,
         })
     }
 
     pub fn send(&self, event: &Event) {
-        let mut buf = Vec::with_capacity(16);
+        let mut buf = Vec::with_capacity(32);
         event.encode(&mut buf);
+        if self.encrypt {
+            if let Some(key) = self.key {
+                let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+                if let Some(encrypted) = encrypt_packet(&key, seq, &buf) {
+                    let _ = self.udp_tx.send(encrypted);
+                }
+                return;
+            }
+        }
         let _ = self.udp_tx.send(buf);
     }
 }
@@ -352,6 +420,7 @@ impl Listener {
         key_timeout_ms: u16,
         require_auth: bool,
         passphrase_hash: String,
+        encrypt: bool,
     ) -> io::Result<Self> {
         let udp = UdpSocket::bind((addr, port))?;
         udp.set_read_timeout(Some(Duration::from_millis(200)))?;
@@ -360,19 +429,24 @@ impl Listener {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let allowed: Arc<Mutex<HashSet<IpAddr>>> = Arc::new(Mutex::new(HashSet::new()));
+        let peer_keys: Arc<Mutex<HashMap<IpAddr, [u8; 32]>>> = Arc::new(Mutex::new(HashMap::new()));
 
         let s = shutdown.clone();
         let allowed_udp = allowed.clone();
-        let udp_thread = thread::spawn(move || run_udp(udp, s, allowed_udp, key_timeout_ms));
+        let peer_keys_udp = peer_keys.clone();
+        let udp_thread = thread::spawn(move || run_udp(udp, s, allowed_udp, peer_keys_udp, key_timeout_ms));
 
         let s = shutdown.clone();
+        let peer_keys_tcp = peer_keys.clone();
         let tcp_thread = thread::spawn(move || {
             run_tcp_accept(
                 tcp,
                 s,
                 allowed,
+                peer_keys_tcp,
                 key_timeout_ms,
                 require_auth,
+                encrypt,
                 passphrase_hash,
             )
         });
@@ -401,6 +475,7 @@ fn run_udp(
     socket: UdpSocket,
     shutdown: Arc<AtomicBool>,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    peer_keys: Arc<Mutex<HashMap<IpAddr, [u8; 32]>>>,
     key_timeout_ms: u16,
 ) {
     let mut buf = [0u8; 1024];
@@ -411,7 +486,18 @@ fn run_udp(
                 if !allowed.lock().unwrap().contains(&src.ip()) {
                     continue;
                 }
-                if let Some(event) = Event::decode(&buf[..n]) {
+                let payload = {
+                    let keys = peer_keys.lock().unwrap();
+                    if let Some(key) = keys.get(&src.ip()) {
+                        match decrypt_packet(key, &buf[..n]) {
+                            Some(pt) => pt,
+                            None => continue,
+                        }
+                    } else {
+                        buf[..n].to_vec()
+                    }
+                };
+                if let Some(event) = Event::decode(&payload) {
                     for action in tracker.handle(&event) {
                         println!("[server] {src}: {action}");
                     }
@@ -502,14 +588,17 @@ fn run_tcp_accept(
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    peer_keys: Arc<Mutex<HashMap<IpAddr, [u8; 32]>>>,
     key_timeout_ms: u16,
     require_auth: bool,
+    encrypt: bool,
     passphrase_hash: String,
 ) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
+                let keys = peer_keys.clone();
                 let s = shutdown.clone();
                 let hash = passphrase_hash.clone();
                 thread::spawn(move || {
@@ -517,9 +606,11 @@ fn run_tcp_accept(
                         stream,
                         peer.ip(),
                         allowed,
+                        keys,
                         key_timeout_ms,
                         s,
                         require_auth,
+                        encrypt,
                         hash,
                     )
                 });
@@ -539,9 +630,11 @@ fn handle_control(
     mut stream: TcpStream,
     peer_ip: IpAddr,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    peer_keys: Arc<Mutex<HashMap<IpAddr, [u8; 32]>>>,
     key_timeout_ms: u16,
     shutdown: Arc<AtomicBool>,
     require_auth: bool,
+    encrypt: bool,
     passphrase_hash: String,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
@@ -576,7 +669,8 @@ fn handle_control(
     let client_version = u16::from_le_bytes(version_slice.try_into().unwrap());
     let client_features = u32::from_le_bytes(feature_slice.try_into().unwrap());
     let negotiated_version = client_version.min(PROTOCOL_VERSION);
-    let negotiated_features = client_features & FEATURES;
+    let server_features = if encrypt { FEATURE_ENCRYPT } else { 0 };
+    let negotiated_features = client_features & server_features;
 
     // 2. Send HelloAck with hash
     let mut ack = Vec::with_capacity(64);
@@ -621,11 +715,29 @@ fn handle_control(
         return;
     }
 
-    // 5. Send AuthAck and add to allowed
+    // 5. Send AuthAck
     let auth_ack = vec![CTRL_AUTH_ACK];
     if let Err(e) = write_frame(&mut stream, &auth_ack) {
         eprintln!("[spud] tcp auth ack: {e}");
         return;
+    }
+
+    // 6. Key exchange if encryption is negotiated
+    let negotiated_encrypt = negotiated_features & FEATURE_ENCRYPT != 0;
+    if negotiated_encrypt {
+        let kx_payload = match read_frame(&mut stream) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let Some((&kx_tag, kx_rest)) = kx_payload.split_first() else {
+            return;
+        };
+        if kx_tag != CTRL_KEY_EXCHANGE || kx_rest.len() != 32 {
+            return;
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(kx_rest);
+        peer_keys.lock().unwrap().insert(peer_ip, key);
     }
 
     allowed.lock().unwrap().insert(peer_ip);
@@ -647,4 +759,5 @@ fn handle_control(
         }
     }
     allowed.lock().unwrap().remove(&peer_ip);
+    peer_keys.lock().unwrap().remove(&peer_ip);
 }

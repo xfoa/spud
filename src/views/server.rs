@@ -46,6 +46,7 @@ pub enum Message {
     PortChanged(String),
     DiscoverableToggled(bool),
     RequireAuthToggled(bool),
+    EncryptToggled(bool),
     PassphraseChanged(String),
     IconChanged(ServerIcon),
     NameChanged(String),
@@ -58,6 +59,7 @@ struct RunningConfig {
     port: String,
     discoverable: bool,
     require_auth: bool,
+    encrypt: bool,
     passphrase_hash: String,
     name: String,
     icon: ServerIcon,
@@ -71,6 +73,7 @@ pub struct State {
     port: String,
     discoverable: bool,
     require_auth: bool,
+    encrypt: bool,
     passphrase: String,
     passphrase_hash: String,
     icon: ServerIcon,
@@ -97,6 +100,7 @@ impl State {
             port: cfg.port.clone(),
             discoverable: cfg.discoverable,
             require_auth: cfg.require_auth,
+            encrypt: cfg.encrypt,
             passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             icon: cfg.icon,
@@ -117,6 +121,7 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
+            encrypt: self.encrypt,
             passphrase_hash: self.passphrase_hash.clone(),
             key_timeout_ms: self.key_timeout_ms,
         }
@@ -130,6 +135,7 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
+            encrypt: self.encrypt,
             passphrase_hash: self.passphrase_hash.clone(),
             name: self.name.clone(),
             icon: self.icon,
@@ -177,6 +183,7 @@ impl State {
             self.key_timeout_ms,
             self.require_auth,
             self.passphrase_hash.clone(),
+            self.encrypt,
         )?;
         self.listener = Some(listener);
         Ok(())
@@ -240,6 +247,7 @@ impl State {
                 }
             }
             Message::RequireAuthToggled(v) => self.require_auth = v,
+            Message::EncryptToggled(v) => self.encrypt = v,
             Message::PassphraseChanged(s) => self.passphrase = s,
             Message::IconChanged(c) => self.icon = c,
             Message::NameChanged(s) => self.name = s,
@@ -314,9 +322,14 @@ impl State {
             .active_config
             .as_ref()
             .map_or(self.require_auth, |c| c.require_auth);
+        let active_encrypt = self
+            .active_config
+            .as_ref()
+            .map_or(self.encrypt, |c| c.encrypt);
+        let is_secure = active_require_auth && active_encrypt;
 
         let (status_label, status_color, lock_icon) = if self.running {
-            if active_require_auth {
+            if is_secure {
                 ("Listening", mt::SUCCESS, icons::LOCK)
             } else {
                 ("Listening (insecure)", mt::DANGER, icons::TRIANGLE_EXCLAMATION)
@@ -382,6 +395,28 @@ impl State {
                 .spacing(8)
                 .into(),
             );
+            if !is_secure {
+                let reason = if !active_require_auth && !active_encrypt {
+                    "Authentication and encryption are disabled."
+                } else if !active_require_auth {
+                    "Authentication is disabled."
+                } else {
+                    "Encryption is disabled."
+                };
+                col_items.push(ui::v_space(8.0).into());
+                col_items.push(
+                    row![
+                        text(icons::TRIANGLE_EXCLAMATION)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::DANGER),
+                        text(reason).size(12).color(mt::DANGER),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            }
         }
 
         if client_connected && !self.running {
@@ -616,7 +651,20 @@ impl State {
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
-        let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
+        let encrypt_card = ui::card(
+            row![
+                column![
+                    text("Encrypt data plane").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Disabling this is less secure but may give better performance."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.encrypt).on_toggle(Message::EncryptToggled),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+        let body = column![auth_card, ui::v_space(16.0), encrypt_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
     }
 

@@ -42,6 +42,7 @@ async fn reconnect(
     passphrase_changed: bool,
     require_auth: bool,
     stored_hash: String,
+    encrypt: bool,
     timeout: std::time::Duration,
 ) -> Result<crate::net::Sender, ()> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
@@ -56,6 +57,7 @@ async fn reconnect(
                 passphrase_changed,
                 require_auth,
                 &stored_hash,
+                encrypt,
             ) {
                 Ok(sender) => {
                     let _ = tx.send(Ok(sender));
@@ -188,6 +190,7 @@ impl Spud {
                     let passphrase_changed = passphrase.is_some();
                     let require_auth = self.client.require_auth();
                     let stored_hash = self.client.passphrase_hash().to_string();
+                    let encrypt = self.client.encrypt();
                     return Task::perform(
                         reconnect(
                             host,
@@ -196,6 +199,7 @@ impl Spud {
                             passphrase_changed,
                             require_auth,
                             stored_hash,
+                            encrypt,
                             timeout,
                         ),
                         move |result| match result {

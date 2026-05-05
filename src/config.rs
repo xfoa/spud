@@ -93,6 +93,7 @@ pub struct ServerConfig {
     pub require_auth: bool,
     pub passphrase_hash: String,
     pub key_timeout_ms: u16,
+    pub encrypt: bool,
 }
 
 impl Default for ServerConfig {
@@ -106,6 +107,7 @@ impl Default for ServerConfig {
             require_auth: true,
             passphrase_hash: String::new(),
             key_timeout_ms: 1000,
+            encrypt: true,
         }
     }
 }
@@ -125,6 +127,7 @@ pub struct ClientConfig {
     pub reconnect_timeout_secs: u16,
     pub blank_screen: bool,
     pub show_hotkey_on_blank: bool,
+    pub encrypt: bool,
 }
 
 impl Default for ClientConfig {
@@ -142,6 +145,7 @@ impl Default for ClientConfig {
             reconnect_timeout_secs: 30,
             blank_screen: false,
             show_hotkey_on_blank: true,
+            encrypt: true,
         }
     }
 }

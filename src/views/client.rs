@@ -60,6 +60,7 @@ pub enum Message {
     NaturalScrollToggled(bool),
     CaptureModeChanged(CaptureMode),
     RequireAuthToggled(bool),
+    EncryptToggled(bool),
     PassphraseChanged(String),
     SelectDiscovered(usize),
     DiscoveryEvent(discovery::Event),
@@ -90,6 +91,7 @@ pub struct State {
     capture_mode: CaptureMode,
     hotkey: String,
     require_auth: bool,
+    encrypt: bool,
     passphrase: String,
     passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
@@ -128,6 +130,7 @@ impl State {
             capture_mode: cfg.capture_mode,
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
+            encrypt: cfg.encrypt,
             passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
@@ -158,6 +161,7 @@ impl State {
             capture_mode: self.capture_mode,
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
+            encrypt: self.encrypt,
             passphrase_hash: self.passphrase_hash.clone(),
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
@@ -171,6 +175,7 @@ impl State {
     pub fn update(&mut self, message: Message) {
         match message {
             Message::SelectPage(p) => self.page = p,
+            Message::EncryptToggled(v) => self.encrypt = v,
             Message::HostChanged(s) => self.host = s,
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
@@ -197,6 +202,7 @@ impl State {
                     passphrase_changed,
                     self.require_auth,
                     &self.passphrase_hash,
+                    self.encrypt,
                 ) {
                     Ok(s) => {
                         self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
@@ -444,6 +450,10 @@ impl State {
         self.require_auth
     }
 
+    pub fn encrypt(&self) -> bool {
+        self.encrypt
+    }
+
     pub fn is_reconnecting(&self) -> bool {
         self.reconnecting
     }
@@ -490,9 +500,10 @@ impl State {
     }
 
     fn connection_page(&self, content_width: f32, server_running: bool) -> Element<'_, Message> {
+        let is_secure = self.require_auth && self.encrypt;
         let status_label = if self.reconnecting {
             "Reconnecting..."
-        } else if self.connected && !self.require_auth {
+        } else if self.connected && !is_secure {
             "Connected (insecure)"
         } else if self.connected {
             "Connected"
@@ -508,7 +519,7 @@ impl State {
         };
 
         let status_row: Element<Message> = if self.connected {
-            let (icon, accent) = if self.require_auth {
+            let (icon, accent) = if is_secure {
                 (icons::LOCK, mt::SUCCESS)
             } else {
                 (icons::TRIANGLE_EXCLAMATION, mt::DANGER)
@@ -599,11 +610,35 @@ impl State {
 
         let mut conn_items: Vec<Element<Message>> = vec![
             status_row.into(),
-            ui::v_space(16.0).into(),
-            host_field,
-            ui::v_space(12.0).into(),
-            port_field,
         ];
+
+        if self.connected && !is_secure {
+            let reason = if !self.require_auth && !self.encrypt {
+                "Authentication and encryption are disabled."
+            } else if !self.require_auth {
+                "Authentication is disabled."
+            } else {
+                "Encryption is disabled."
+            };
+            conn_items.push(ui::v_space(8.0).into());
+            conn_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(11)
+                        .color(mt::DANGER),
+                    text(reason).size(12).color(mt::DANGER),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        conn_items.push(ui::v_space(16.0).into());
+        conn_items.push(host_field);
+        conn_items.push(ui::v_space(12.0).into());
+        conn_items.push(port_field);
 
         if server_running && !is_active {
             conn_items.push(ui::v_space(12.0).into());
@@ -971,7 +1006,20 @@ impl State {
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
-        let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
+        let encrypt_card = ui::card(
+            row![
+                column![
+                    text("Encrypt data plane").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Disabling this is less secure but may give better performance."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.encrypt).on_toggle(Message::EncryptToggled),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+        let body = column![auth_card, ui::v_space(16.0), encrypt_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
     }
 
