@@ -58,7 +58,7 @@ struct RunningConfig {
     port: String,
     discoverable: bool,
     require_auth: bool,
-    passphrase_hash: String,
+    passphrase: String,
     name: String,
     icon: ServerIcon,
     key_timeout_ms: u16,
@@ -97,8 +97,8 @@ impl State {
             port: cfg.port.clone(),
             discoverable: cfg.discoverable,
             require_auth: cfg.require_auth,
-            passphrase: String::new(),
-            passphrase_hash: cfg.passphrase_hash.clone(),
+            passphrase: cfg.passphrase.clone(),
+            passphrase_hash: String::new(),
             icon: cfg.icon,
             name: cfg.name.clone(),
             key_timeout_ms: cfg.key_timeout_ms,
@@ -110,11 +110,6 @@ impl State {
     }
 
     pub fn to_config(&self) -> ServerConfig {
-        let passphrase_hash = if self.passphrase.is_empty() {
-            self.passphrase_hash.clone()
-        } else {
-            hash_passphrase(&self.passphrase)
-        };
         ServerConfig {
             name: self.name.clone(),
             icon: self.icon,
@@ -122,7 +117,7 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase_hash,
+            passphrase: self.passphrase.clone(),
             key_timeout_ms: self.key_timeout_ms,
         }
     }
@@ -130,17 +125,12 @@ impl State {
 
 impl State {
     fn snapshot(&self) -> RunningConfig {
-        let passphrase_hash = if self.passphrase.is_empty() {
-            self.passphrase_hash.clone()
-        } else {
-            hash_passphrase(&self.passphrase)
-        };
         RunningConfig {
             bind_address: self.bind_address.clone(),
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase_hash,
+            passphrase: self.passphrase.clone(),
             name: self.name.clone(),
             icon: self.icon,
             key_timeout_ms: self.key_timeout_ms,
@@ -177,7 +167,16 @@ impl State {
         } else {
             self.bind_address.as_str()
         };
-        let listener = crate::net::Listener::bind(addr, port, self.key_timeout_ms)?;
+        if !self.passphrase.is_empty() {
+            self.passphrase_hash = hash_passphrase(&self.passphrase);
+        }
+        let listener = crate::net::Listener::bind(
+            addr,
+            port,
+            self.key_timeout_ms,
+            self.require_auth,
+            self.passphrase_hash.clone(),
+        )?;
         self.listener = Some(listener);
         Ok(())
     }
@@ -283,8 +282,7 @@ impl State {
             ("Stopped", mt::ON_SURFACE_VARIANT, icons::TRIANGLE_EXCLAMATION)
         };
 
-        let passphrase_missing =
-            self.require_auth && self.passphrase.is_empty() && self.passphrase_hash.is_empty();
+        let passphrase_missing = self.require_auth && self.passphrase.is_empty();
 
         let action: Element<Message> = if self.running {
             ui::outlined_button("Stop server", Message::StopServer)
@@ -541,39 +539,38 @@ impl State {
 
         if self.passphrase.is_empty() {
             passphrase_items.push(ui::v_space(8.0).into());
-            if self.passphrase_hash.is_empty() {
-                if self.require_auth {
-                    passphrase_items.push(
-                        row![
-                            text(icons::TRIANGLE_EXCLAMATION)
-                                .font(icons::FA_SOLID)
-                                .size(11)
-                                .color(mt::WARNING),
-                            text("A passphrase is required when authentication is enabled.")
-                                .size(12)
-                                .color(mt::WARNING),
-                        ]
-                        .spacing(6)
-                        .align_y(iced::Alignment::Center)
-                        .into(),
-                    );
-                }
-            } else {
+            if self.require_auth {
                 passphrase_items.push(
                     row![
-                        text(icons::LOCK)
+                        text(icons::TRIANGLE_EXCLAMATION)
                             .font(icons::FA_SOLID)
                             .size(11)
-                            .color(mt::SUCCESS),
-                        text("Passphrase is set. Type to change.")
+                            .color(mt::WARNING),
+                        text("A passphrase is required when authentication is enabled.")
                             .size(12)
-                            .color(mt::SUCCESS),
+                            .color(mt::WARNING),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center)
                     .into(),
                 );
             }
+        } else {
+            passphrase_items.push(ui::v_space(8.0).into());
+            passphrase_items.push(
+                row![
+                    text(icons::LOCK)
+                        .font(icons::FA_SOLID)
+                        .size(11)
+                        .color(mt::SUCCESS),
+                    text("Passphrase is set.")
+                        .size(12)
+                        .color(mt::SUCCESS),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
         }
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));

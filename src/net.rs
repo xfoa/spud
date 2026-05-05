@@ -56,6 +56,7 @@ const TAG_HEARTBEAT: u8 = 0x07;
 
 const CTRL_HELLO: u8 = 0x01;
 const CTRL_HELLO_ACK: u8 = 0x02;
+const CTRL_AUTH_FAILED: u8 = 0x03;
 
 impl Event {
     pub fn encode(&self, buf: &mut Vec<u8>) {
@@ -163,7 +164,12 @@ pub struct Sender {
 }
 
 impl Sender {
-    pub fn connect(host: &str, port: u16) -> io::Result<Self> {
+    pub fn connect(
+        host: &str,
+        port: u16,
+        passphrase: Option<&str>,
+        require_auth: bool,
+    ) -> io::Result<Self> {
         let addr = (host, port)
             .to_socket_addrs()?
             .next()
@@ -172,16 +178,32 @@ impl Sender {
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
 
-        let mut hello = Vec::with_capacity(7);
+        let mut hello = Vec::with_capacity(8);
         hello.push(CTRL_HELLO);
         hello.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
         hello.extend_from_slice(&FEATURES.to_le_bytes());
+        if let Some(p) = passphrase {
+            let bytes = p.as_bytes();
+            let len = bytes.len().min(255);
+            hello.push(len as u8);
+            hello.extend_from_slice(&bytes[..len]);
+        } else {
+            hello.push(0);
+        }
         write_frame(&mut tcp, &hello)?;
 
         let payload = read_frame(&mut tcp)?;
         let (&tag, rest) = payload
             .split_first()
             .ok_or_else(|| protocol_err("empty ack"))?;
+        if tag == CTRL_AUTH_FAILED {
+            let msg = if passphrase.is_some() {
+                "Incorrect passphrase"
+            } else {
+                "Server requires a passphrase"
+            };
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, msg));
+        }
         if tag != CTRL_HELLO_ACK {
             return Err(protocol_err("expected HelloAck"));
         }
@@ -200,6 +222,13 @@ impl Sender {
             .unwrap_or(&[0xe8, 0x03])
             .try_into()
             .unwrap();
+        let server_requires_auth = rest.get(8).copied().unwrap_or(0) != 0;
+        if require_auth && !server_requires_auth {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Server does not require authentication",
+            ));
+        }
         let negotiated_version = u16::from_le_bytes(version_bytes);
         let negotiated_features = u32::from_le_bytes(feature_bytes);
         let key_timeout_ms = u16::from_le_bytes(key_timeout_bytes);
@@ -274,7 +303,13 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn bind(addr: &str, port: u16, key_timeout_ms: u16) -> io::Result<Self> {
+    pub fn bind(
+        addr: &str,
+        port: u16,
+        key_timeout_ms: u16,
+        require_auth: bool,
+        passphrase_hash: String,
+    ) -> io::Result<Self> {
         let udp = UdpSocket::bind((addr, port))?;
         udp.set_read_timeout(Some(Duration::from_millis(200)))?;
         let tcp = TcpListener::bind((addr, port))?;
@@ -288,7 +323,9 @@ impl Listener {
         let udp_thread = thread::spawn(move || run_udp(udp, s, allowed_udp, key_timeout_ms));
 
         let s = shutdown.clone();
-        let tcp_thread = thread::spawn(move || run_tcp_accept(tcp, s, allowed, key_timeout_ms));
+        let tcp_thread = thread::spawn(move || {
+            run_tcp_accept(tcp, s, allowed, key_timeout_ms, require_auth, passphrase_hash)
+        });
 
         Ok(Self {
             shutdown,
@@ -416,13 +453,18 @@ fn run_tcp_accept(
     shutdown: Arc<AtomicBool>,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
     key_timeout_ms: u16,
+    require_auth: bool,
+    passphrase_hash: String,
 ) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
                 let s = shutdown.clone();
-                thread::spawn(move || handle_control(stream, peer.ip(), allowed, key_timeout_ms, s));
+                let hash = passphrase_hash.clone();
+                thread::spawn(move || {
+                    handle_control(stream, peer.ip(), allowed, key_timeout_ms, s, require_auth, hash)
+                });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
@@ -441,6 +483,8 @@ fn handle_control(
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
     key_timeout_ms: u16,
     shutdown: Arc<AtomicBool>,
+    require_auth: bool,
+    passphrase_hash: String,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
         eprintln!("[spud] tcp nodelay: {e}");
@@ -474,11 +518,34 @@ fn handle_control(
     let negotiated_version = client_version.min(PROTOCOL_VERSION);
     let negotiated_features = client_features & FEATURES;
 
-    let mut ack = Vec::with_capacity(9);
+    // Parse optional auth from byte 6 onward.
+    let auth = rest.get(6..).and_then(|bytes| {
+        let (&len, rest) = bytes.split_first()?;
+        if len == 0 {
+            return Some("");
+        }
+        rest.get(..len as usize)
+            .and_then(|b| std::str::from_utf8(b).ok())
+    });
+
+    if require_auth {
+        let ok = match auth {
+            Some(pass) => crate::config::verify_passphrase(pass, &passphrase_hash),
+            None => false,
+        };
+        if !ok {
+            let fail = vec![CTRL_AUTH_FAILED];
+            let _ = write_frame(&mut stream, &fail);
+            return;
+        }
+    }
+
+    let mut ack = Vec::with_capacity(10);
     ack.push(CTRL_HELLO_ACK);
     ack.extend_from_slice(&negotiated_version.to_le_bytes());
     ack.extend_from_slice(&negotiated_features.to_le_bytes());
     ack.extend_from_slice(&key_timeout_ms.to_le_bytes());
+    ack.push(if require_auth { 1 } else { 0 });
     if let Err(e) = write_frame(&mut stream, &ack) {
         eprintln!("[spud] tcp ack: {e}");
         return;

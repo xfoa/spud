@@ -49,13 +49,13 @@ cargo run
 
 ## Screenshots
 
-### Server
-
-![Spud server tab showing the status page](resources/server-screenshot.png)
-
 ### Client
 
 ![Spud client tab showing the connection page](resources/client-screenshot.png)
+
+### Server
+
+![Spud server tab showing the status page](resources/server-screenshot.png)
 
 ## Contribute
 

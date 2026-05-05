@@ -19,6 +19,9 @@ All multi-byte integers are little-endian.
 |--------------------|------------------|------------------------------------------|
 | `PROTOCOL_VERSION` | `1`              | Highest version this build understands.  |
 | `FEATURES`         | `0`              | Feature bitmap. No features defined yet. |
+| `CTRL_HELLO`       | `0x01`           | Client handshake opening.                |
+| `CTRL_HELLO_ACK`   | `0x02`           | Server handshake reply.                  |
+| `CTRL_AUTH_FAILED` | `0x03`           | Server auth rejection.                   |
 | `KEY_TIMEOUT`      | `1 s`            | Server releases held keys with no recent activity. |
 | Heartbeat interval | `500 ms`         | Client refresh cadence for held keys.    |
 | Connect timeout    | `5 s`            | Client TCP connect + handshake budget.   |
@@ -52,10 +55,14 @@ title Hello payload
 0-7: "Tag = 0x01"
 8-23: "Version (u16 LE)"
 24-55: "Features (u32 LE)"
+56-63: "Auth length (u8)"
+64-..: "Auth bytes (UTF-8, variable, up to 255)"
 ```
 
 * `Version`: highest protocol version the client supports.
 * `Features`: feature bitmap the client wishes to advertise.
+* `Auth length`: length of the passphrase in bytes. `0` when authentication is not configured on the client.
+* `Auth bytes`: the plaintext passphrase. The server verifies it against its stored Argon2 hash.
 
 #### `0x02` HelloAck (server -> client)
 
@@ -67,6 +74,8 @@ title HelloAck payload
 0-7: "Tag = 0x02"
 8-23: "Version (u16 LE)"
 24-55: "Features (u32 LE)"
+56-71: "Key timeout (u16 LE)"
+72-79: "Auth required (u8)"
 ```
 
 * `Version`: negotiated protocol version, defined as
@@ -74,20 +83,34 @@ title HelloAck payload
   unwilling to proceed; the client must treat the connection as failed.
 * `Features`: negotiated feature bitmap, defined as
   `client.features & server.features`.
+* `Key timeout`: server key-release timeout in milliseconds.
+* `Auth required`: `1` if the server has authentication enabled, `0` otherwise.
+  The client may refuse to proceed if it requires authentication but the server
+  does not advertise it.
+
+#### `0x03` AuthFailed (server -> client)
+
+Sent by the server when the client provides an incorrect or missing passphrase
+while the server has `require_auth` enabled. The server closes the TCP
+connection immediately after sending this message.
 
 ### Lifecycle
 
 1. Client opens a TCP connection (with `TCP_NODELAY`) to `host:port` within the
    connect timeout.
-2. Client sends `Hello`, then reads `HelloAck` within the connect timeout.
-3. Server records the peer IP in its authorized set after replying.
-4. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
+2. Client sends `Hello` (including passphrase if `require_auth` is enabled).
+3. Server verifies the passphrase when `require_auth` is enabled:
+   * If valid: server sends `HelloAck` and records the peer IP.
+   * If invalid or missing: server sends `AuthFailed` and closes the connection.
+4. Client reads the server's reply. `AuthFailed` is reported as an authentication
+   error in the UI.
+5. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
    packets may now flow.
-5. Both sides keep the TCP socket open as a liveness signal. Either side
+6. Both sides keep the TCP socket open as a liveness signal. Either side
    closing it terminates the session.
-6. When the server observes the TCP stream close, it removes the peer IP from
+7. When the server observes the TCP stream close, it removes the peer IP from
    its authorized set; subsequent UDP packets from that IP are dropped.
-7. The client also reads from the TCP socket in a background thread; an `EOF`
+8. The client also reads from the TCP socket in a background thread; an `EOF`
    or read error surfaces as a `Disconnected` event in the UI.
 
 The control channel is currently silent after `HelloAck`. Future work may add

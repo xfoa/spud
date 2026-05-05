@@ -35,12 +35,19 @@ fn build_wayland_hotkey_stream(
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
-async fn reconnect(host: String, port: u16, timeout: std::time::Duration) -> Result<crate::net::Sender, ()> {
+async fn reconnect(
+    host: String,
+    port: u16,
+    passphrase: Option<String>,
+    require_auth: bool,
+    timeout: std::time::Duration,
+) -> Result<crate::net::Sender, ()> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
-            match crate::net::Sender::connect(&host, port) {
+            let pass = passphrase.as_deref();
+            match crate::net::Sender::connect(&host, port, pass, require_auth) {
                 Ok(sender) => {
                     let _ = tx.send(Ok(sender));
                     return;
@@ -168,10 +175,15 @@ impl Spud {
                     let port = self.client.port().parse().unwrap_or(7878);
                     let gen = self.client.reconnect_generation();
                     let timeout = self.client.reconnect_timeout();
-                    return Task::perform(reconnect(host, port, timeout), move |result| match result {
-                        Ok(sender) => Message::Client(client::Message::ReconnectSuccess(sender, gen)),
-                        Err(()) => Message::Client(client::Message::ReconnectFailed(gen)),
-                    });
+                    let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
+                    let require_auth = self.client.require_auth();
+                    return Task::perform(
+                        reconnect(host, port, passphrase, require_auth, timeout),
+                        move |result| match result {
+                            Ok(sender) => Message::Client(client::Message::ReconnectSuccess(sender, gen)),
+                            Err(()) => Message::Client(client::Message::ReconnectFailed(gen)),
+                        },
+                    );
                 }
                 Task::none()
             }

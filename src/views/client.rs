@@ -5,7 +5,7 @@ use iced::widget::{checkbox, column, container, row, slider, text, text_input};
 use iced::{Background, Border, Color, Element, Length, Padding, Point, Shadow, Vector};
 
 use crate::components as ui;
-use crate::config::{hash_passphrase, CaptureMode, ClientConfig};
+use crate::config::{CaptureMode, ClientConfig};
 use crate::discovery::{self, DiscoveredServer};
 use crate::icons;
 use crate::theme as mt;
@@ -91,7 +91,6 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
-    passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
@@ -128,8 +127,7 @@ impl State {
             capture_mode: cfg.capture_mode,
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
-            passphrase: String::new(),
-            passphrase_hash: cfg.passphrase_hash.clone(),
+            passphrase: cfg.passphrase.clone(),
             discovered: Vec::new(),
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
@@ -150,11 +148,6 @@ impl State {
     }
 
     pub fn to_config(&self) -> ClientConfig {
-        let passphrase_hash = if self.passphrase.is_empty() {
-            self.passphrase_hash.clone()
-        } else {
-            hash_passphrase(&self.passphrase)
-        };
         ClientConfig {
             host: self.host.clone(),
             port: self.port.clone(),
@@ -163,7 +156,7 @@ impl State {
             capture_mode: self.capture_mode,
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
-            passphrase_hash,
+            passphrase: self.passphrase.clone(),
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
             blank_screen: self.blank_screen,
@@ -185,7 +178,16 @@ impl State {
             Message::Connect => {
                 let port = self.port.parse::<u16>().unwrap_or(7878);
                 self.last_error = None;
-                match crate::net::Sender::connect(&self.host, port) {
+                let passphrase = if self.require_auth {
+                    Some(self.passphrase.as_str()).filter(|p| !p.is_empty())
+                } else {
+                    None
+                };
+                if self.require_auth && passphrase.is_none() {
+                    self.last_error = Some("Passphrase required.".to_string());
+                    return;
+                }
+                match crate::net::Sender::connect(&self.host, port, passphrase, self.require_auth) {
                     Ok(s) => {
                         self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
                         self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
@@ -412,6 +414,18 @@ impl State {
 
     pub fn hotkey_display(&self) -> &str {
         &self.hotkey
+    }
+
+    pub fn connection_passphrase(&self) -> Option<&str> {
+        if self.require_auth {
+            Some(self.passphrase.as_str()).filter(|p| !p.is_empty())
+        } else {
+            None
+        }
+    }
+
+    pub fn require_auth(&self) -> bool {
+        self.require_auth
     }
 
     pub fn is_reconnecting(&self) -> bool {
@@ -889,39 +903,38 @@ impl State {
 
         if self.passphrase.is_empty() {
             passphrase_items.push(ui::v_space(8.0).into());
-            if self.passphrase_hash.is_empty() {
-                if self.require_auth {
-                    passphrase_items.push(
-                        row![
-                            text(icons::TRIANGLE_EXCLAMATION)
-                                .font(icons::FA_SOLID)
-                                .size(11)
-                                .color(mt::WARNING),
-                            text("A passphrase is required when authentication is enabled.")
-                                .size(12)
-                                .color(mt::WARNING),
-                        ]
-                        .spacing(6)
-                        .align_y(iced::Alignment::Center)
-                        .into(),
-                    );
-                }
-            } else {
+            if self.require_auth {
                 passphrase_items.push(
                     row![
-                        text(icons::LOCK)
+                        text(icons::TRIANGLE_EXCLAMATION)
                             .font(icons::FA_SOLID)
                             .size(11)
-                            .color(mt::SUCCESS),
-                        text("Passphrase is set. Type to change.")
+                            .color(mt::WARNING),
+                        text("A passphrase is required when authentication is enabled.")
                             .size(12)
-                            .color(mt::SUCCESS),
+                            .color(mt::WARNING),
                     ]
                     .spacing(6)
                     .align_y(iced::Alignment::Center)
                     .into(),
                 );
             }
+        } else {
+            passphrase_items.push(ui::v_space(8.0).into());
+            passphrase_items.push(
+                row![
+                    text(icons::LOCK)
+                        .font(icons::FA_SOLID)
+                        .size(11)
+                        .color(mt::SUCCESS),
+                    text("Passphrase is set.")
+                        .size(12)
+                        .color(mt::SUCCESS),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
         }
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));

@@ -90,7 +90,7 @@ pub struct ServerConfig {
     pub port: String,
     pub discoverable: bool,
     pub require_auth: bool,
-    pub passphrase_hash: String,
+    pub passphrase: String,
     pub key_timeout_ms: u16,
 }
 
@@ -103,7 +103,7 @@ impl Default for ServerConfig {
             port: "7878".to_string(),
             discoverable: true,
             require_auth: true,
-            passphrase_hash: String::new(),
+            passphrase: String::new(),
             key_timeout_ms: 1000,
         }
     }
@@ -119,7 +119,7 @@ pub struct ClientConfig {
     pub capture_mode: CaptureMode,
     pub hotkey: String,
     pub require_auth: bool,
-    pub passphrase_hash: String,
+    pub passphrase: String,
     pub keepalive_interval_ms: u16,
     pub reconnect_timeout_secs: u16,
     pub blank_screen: bool,
@@ -136,7 +136,7 @@ impl Default for ClientConfig {
             capture_mode: CaptureMode::Hotkey,
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
-            passphrase_hash: String::new(),
+            passphrase: String::new(),
             keepalive_interval_ms: 50,
             reconnect_timeout_secs: 30,
             blank_screen: false,
