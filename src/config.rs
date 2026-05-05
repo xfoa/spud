@@ -106,6 +106,7 @@ pub struct ClientConfig {
     pub hotkey: String,
     pub require_auth: bool,
     pub passphrase_hash: String,
+    pub keepalive_interval_ms: u16,
 }
 
 impl Default for ClientConfig {
@@ -119,6 +120,7 @@ impl Default for ClientConfig {
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
             passphrase_hash: String::new(),
+            keepalive_interval_ms: 50,
         }
     }
 }

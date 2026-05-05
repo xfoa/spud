@@ -204,6 +204,10 @@ impl Spud {
                 iced::time::every(self.client.heartbeat_interval())
                     .map(|_| Message::Client(client::Message::HeartbeatTick)),
             );
+            subs.push(
+                iced::time::every(self.client.keepalive_interval())
+                    .map(|_| Message::Client(client::Message::KeepaliveTick)),
+            );
         }
         subs.push(iced::keyboard::listen().filter_map(|event| {
             if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = event {

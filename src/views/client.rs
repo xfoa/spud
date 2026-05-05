@@ -16,10 +16,11 @@ pub enum Page {
     Capture,
     Mouse,
     Security,
+    Advanced,
 }
 
 impl Page {
-    const ALL: [Page; 4] = [Page::Connection, Page::Capture, Page::Mouse, Page::Security];
+    const ALL: [Page; 5] = [Page::Connection, Page::Capture, Page::Mouse, Page::Security, Page::Advanced];
 
     fn label(self) -> &'static str {
         match self {
@@ -27,6 +28,7 @@ impl Page {
             Page::Mouse => "Mouse",
             Page::Capture => "Capture",
             Page::Security => "Security",
+            Page::Advanced => "Advanced",
         }
     }
 
@@ -36,6 +38,7 @@ impl Page {
             Page::Mouse => icons::COMPUTER_MOUSE,
             Page::Capture => icons::KEYBOARD,
             Page::Security => icons::SHIELD_HALVED,
+            Page::Advanced => icons::GEAR,
         }
     }
 }
@@ -70,6 +73,8 @@ pub enum Message {
     ReconnectSuccess(crate::net::Sender, u64),
     ReconnectFailed(u64),
     HeartbeatTick,
+    KeepaliveTick,
+    KeepaliveIntervalChanged(u16),
 }
 
 pub struct State {
@@ -95,6 +100,7 @@ pub struct State {
     heartbeat_interval_ms: u64,
     reconnecting: bool,
     reconnect_generation: u64,
+    keepalive_interval_ms: u16,
 }
 
 impl Default for State {
@@ -128,6 +134,7 @@ impl State {
             heartbeat_interval_ms: 500,
             reconnecting: false,
             reconnect_generation: 0,
+            keepalive_interval_ms: cfg.keepalive_interval_ms,
         }
     }
 
@@ -146,6 +153,7 @@ impl State {
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
             passphrase_hash,
+            keepalive_interval_ms: self.keepalive_interval_ms,
         }
     }
 }
@@ -325,6 +333,14 @@ impl State {
                     }
                 }
             }
+            Message::KeepaliveTick => {
+                if let Some(sender) = &self.sender {
+                    sender.send(&crate::net::Event::Heartbeat);
+                }
+            }
+            Message::KeepaliveIntervalChanged(v) => {
+                self.keepalive_interval_ms = (v / 10) * 10;
+            }
         }
     }
 
@@ -342,6 +358,10 @@ impl State {
 
     pub fn heartbeat_interval(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.heartbeat_interval_ms)
+    }
+
+    pub fn keepalive_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(u64::from(self.keepalive_interval_ms))
     }
 
     pub fn is_reconnecting(&self) -> bool {
@@ -385,6 +405,7 @@ impl State {
             Page::Mouse => self.input_page(),
             Page::Capture => self.hotkeys_page(),
             Page::Security => self.security_page(),
+            Page::Advanced => self.advanced_page(),
         }
     }
 
@@ -819,6 +840,28 @@ impl State {
 
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
+    }
+
+    fn advanced_page(&self) -> Element<'_, Message> {
+        let slider_row = row![
+            slider(10..=1000, self.keepalive_interval_ms, Message::KeepaliveIntervalChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{} ms", self.keepalive_interval_ms)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let keepalive_field = column![
+            ui::field_label("Keepalive interval"),
+            slider_row,
+            ui::v_space(4.0),
+            ui::helper_text("A low setting is good for latency on some wireless networks."),
+        ]
+        .spacing(6);
+
+        let keepalive_card = ui::card(column![keepalive_field].spacing(0));
+        let body = column![keepalive_card].spacing(0);
+        ui::page_body("Advanced", body)
     }
 }
 

@@ -43,6 +43,7 @@ pub enum Event {
     MouseButton { button: u8, pressed: bool },
     Wheel { dx: i8, dy: i8 },
     KeyRepeat(String),
+    Heartbeat,
 }
 
 const TAG_KEY_DOWN: u8 = 0x01;
@@ -51,6 +52,7 @@ const TAG_MOUSE_MOVE: u8 = 0x03;
 const TAG_MOUSE_BUTTON: u8 = 0x04;
 const TAG_WHEEL: u8 = 0x05;
 const TAG_KEY_REPEAT: u8 = 0x06;
+const TAG_HEARTBEAT: u8 = 0x07;
 
 const CTRL_HELLO: u8 = 0x01;
 const CTRL_HELLO_ACK: u8 = 0x02;
@@ -85,6 +87,9 @@ impl Event {
                 buf.push(*dx as u8);
                 buf.push(*dy as u8);
             }
+            Event::Heartbeat => {
+                buf.push(TAG_HEARTBEAT);
+            }
         }
     }
 
@@ -109,6 +114,7 @@ impl Event {
                 let dy = *rest.get(1)? as i8;
                 Some(Event::Wheel { dx, dy })
             }
+            TAG_HEARTBEAT => Some(Event::Heartbeat),
             _ => None,
         }
     }
@@ -386,6 +392,7 @@ impl KeyTracker {
                 vec![format!("mouse {verb} button {button}")]
             }
             Event::Wheel { dx, dy } => vec![format!("wheel ({dx}, {dy})")],
+            Event::Heartbeat => Vec::new(),
         }
     }
 
