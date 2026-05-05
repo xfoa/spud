@@ -370,7 +370,7 @@ impl Spud {
             let overlay_text: Element<Message> = if show_text {
                 text(String::new() + "Press " + self.client.hotkey_display() + " to stop capturing")
                     .size(24)
-                    .color(iced::Color::from_rgb(0.15, 0.15, 0.15))
+                    .color(iced::Color::from_rgb(0.25, 0.25, 0.25))
                     .into()
             } else {
                 text("").size(1).into()
@@ -410,5 +410,13 @@ impl Spud {
 
     pub fn theme(&self) -> Theme {
         mt::material_theme()
+    }
+
+    pub fn title(&self) -> String {
+        if self.mode == Mode::Client && self.client.is_capturing_hotkey() && self.client.is_grabbed() {
+            format!("Spud - Capturing (press {} to stop)", self.client.hotkey_display())
+        } else {
+            "Spud".to_string()
+        }
     }
 }

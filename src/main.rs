@@ -19,7 +19,7 @@ fn main() -> iced::Result {
 
     let app_name = "Spud";
     iced::application(app::Spud::default, app::Spud::update, app::Spud::view)
-        .title(app_name)
+        .title(app::Spud::title)
         .theme(app::Spud::theme)
         .subscription(app::Spud::subscription)
         .font(icons::FA_SOLID_BYTES)
