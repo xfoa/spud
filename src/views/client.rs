@@ -91,6 +91,8 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
+    passphrase_salt: String,
+    passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
@@ -127,7 +129,9 @@ impl State {
             capture_mode: cfg.capture_mode,
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
-            passphrase: cfg.passphrase.clone(),
+            passphrase: String::new(),
+            passphrase_salt: cfg.passphrase_salt.clone(),
+            passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
@@ -156,7 +160,8 @@ impl State {
             capture_mode: self.capture_mode,
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
-            passphrase: self.passphrase.clone(),
+            passphrase_salt: self.passphrase_salt.clone(),
+            passphrase_hash: self.passphrase_hash.clone(),
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
             blank_screen: self.blank_screen,
@@ -183,14 +188,26 @@ impl State {
                 } else {
                     None
                 };
-                if self.require_auth && passphrase.is_none() {
+                if self.require_auth && passphrase.is_none() && self.passphrase_hash.is_empty() {
                     self.last_error = Some("Passphrase required.".to_string());
                     return;
                 }
-                match crate::net::Sender::connect(&self.host, port, passphrase, self.require_auth) {
+                let passphrase_changed = !self.passphrase.is_empty();
+                match crate::net::Sender::connect(
+                    &self.host,
+                    port,
+                    passphrase,
+                    passphrase_changed,
+                    self.require_auth,
+                    &self.passphrase_salt,
+                    &self.passphrase_hash,
+                ) {
                     Ok(s) => {
                         self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
                         self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
+                        self.passphrase_salt = s.server_salt.clone();
+                        self.passphrase_hash = s.client_hash.clone();
+                        self.passphrase.clear();
                         self.sender = Some(s);
                         self.connected = true;
                     }
@@ -422,6 +439,14 @@ impl State {
         } else {
             None
         }
+    }
+
+    pub fn passphrase_salt(&self) -> &str {
+        &self.passphrase_salt
+    }
+
+    pub fn passphrase_hash(&self) -> &str {
+        &self.passphrase_hash
     }
 
     pub fn require_auth(&self) -> bool {
@@ -901,7 +926,23 @@ impl State {
                 .into(),
         ];
 
-        if self.passphrase.is_empty() {
+        if !self.passphrase.is_empty() {
+            passphrase_items.push(ui::v_space(8.0).into());
+            passphrase_items.push(
+                row![
+                    text(icons::LOCK)
+                        .font(icons::FA_SOLID)
+                        .size(11)
+                        .color(mt::SUCCESS),
+                    text("Passphrase is set.")
+                        .size(12)
+                        .color(mt::SUCCESS),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        } else if self.passphrase_hash.is_empty() {
             passphrase_items.push(ui::v_space(8.0).into());
             if self.require_auth {
                 passphrase_items.push(
@@ -927,7 +968,7 @@ impl State {
                         .font(icons::FA_SOLID)
                         .size(11)
                         .color(mt::SUCCESS),
-                    text("Passphrase is set.")
+                    text("Passphrase is saved. Type a new one to change it.")
                         .size(12)
                         .color(mt::SUCCESS),
                 ]

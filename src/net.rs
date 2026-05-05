@@ -57,6 +57,8 @@ const TAG_HEARTBEAT: u8 = 0x07;
 const CTRL_HELLO: u8 = 0x01;
 const CTRL_HELLO_ACK: u8 = 0x02;
 const CTRL_AUTH_FAILED: u8 = 0x03;
+const CTRL_AUTH: u8 = 0x04;
+const CTRL_AUTH_ACK: u8 = 0x05;
 
 impl Event {
     pub fn encode(&self, buf: &mut Vec<u8>) {
@@ -134,6 +136,13 @@ fn read_name(rest: &[u8]) -> Option<String> {
     String::from_utf8(bytes.to_vec()).ok()
 }
 
+fn read_name_split(rest: &[u8]) -> Option<(String, &[u8])> {
+    let (&len, rest) = rest.split_first()?;
+    let bytes = rest.get(..len as usize)?;
+    let tail = rest.get(len as usize..)?;
+    String::from_utf8(bytes.to_vec()).ok().map(|s| (s, tail))
+}
+
 fn write_frame(stream: &mut TcpStream, payload: &[u8]) -> io::Result<()> {
     let len = u16::try_from(payload.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
@@ -161,6 +170,9 @@ pub struct Sender {
     pub negotiated_version: u16,
     pub negotiated_features: u32,
     pub key_timeout_ms: u16,
+    pub server_salt: String,
+    pub server_hash: String,
+    pub client_hash: String,
 }
 
 impl Sender {
@@ -168,7 +180,10 @@ impl Sender {
         host: &str,
         port: u16,
         passphrase: Option<&str>,
+        passphrase_changed: bool,
         require_auth: bool,
+        _stored_salt: &str,
+        stored_hash: &str,
     ) -> io::Result<Self> {
         let addr = (host, port)
             .to_socket_addrs()?
@@ -178,37 +193,23 @@ impl Sender {
         tcp.set_nodelay(true)?;
         tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
 
-        let mut hello = Vec::with_capacity(8);
+        // 1. Send Hello
+        let mut hello = Vec::with_capacity(7);
         hello.push(CTRL_HELLO);
         hello.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
         hello.extend_from_slice(&FEATURES.to_le_bytes());
-        if let Some(p) = passphrase {
-            let bytes = p.as_bytes();
-            let len = bytes.len().min(255);
-            hello.push(len as u8);
-            hello.extend_from_slice(&bytes[..len]);
-        } else {
-            hello.push(0);
-        }
         write_frame(&mut tcp, &hello)?;
 
+        // 2. Read HelloAck
         let payload = read_frame(&mut tcp)?;
         let (&tag, rest) = payload
             .split_first()
             .ok_or_else(|| protocol_err("empty ack"))?;
-        if tag == CTRL_AUTH_FAILED {
-            let msg = if passphrase.is_some() {
-                "Incorrect passphrase"
-            } else {
-                "Server requires a passphrase"
-            };
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, msg));
-        }
         if tag != CTRL_HELLO_ACK {
             return Err(protocol_err("expected HelloAck"));
         }
         let version_bytes: [u8; 2] = rest
-            .get(..2)
+            .get(0..2)
             .ok_or_else(|| protocol_err("short ack"))?
             .try_into()
             .unwrap();
@@ -222,18 +223,60 @@ impl Sender {
             .unwrap_or(&[0xe8, 0x03])
             .try_into()
             .unwrap();
-        let server_requires_auth = rest.get(8).copied().unwrap_or(0) != 0;
-        if require_auth && !server_requires_auth {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "Server does not require authentication",
-            ));
-        }
+        let (server_salt, rest) = read_name_split(&rest[8..])
+            .ok_or_else(|| protocol_err("missing salt"))?;
+        let (server_hash, _) = read_name_split(rest)
+            .ok_or_else(|| protocol_err("missing hash"))?;
+
         let negotiated_version = u16::from_le_bytes(version_bytes);
         let negotiated_features = u32::from_le_bytes(feature_bytes);
         let key_timeout_ms = u16::from_le_bytes(key_timeout_bytes);
         if negotiated_version == 0 {
             return Err(protocol_err("incompatible protocol version"));
+        }
+
+        if require_auth && server_salt.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Server does not require authentication",
+            ));
+        }
+
+        // 3. Compute client hash
+        let client_hash = if passphrase_changed {
+            let pass = passphrase.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Passphrase required")
+            })?;
+            crate::config::hash_passphrase_with_salt(pass, &server_salt)
+                .ok_or_else(|| protocol_err("failed to hash passphrase"))?
+        } else if require_auth && server_hash != stored_hash {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Server passphrase has changed",
+            ));
+        } else {
+            stored_hash.to_string()
+        };
+
+        // 4. Send Auth
+        let mut auth = Vec::with_capacity(64);
+        auth.push(CTRL_AUTH);
+        push_name(&mut auth, &client_hash);
+        write_frame(&mut tcp, &auth)?;
+
+        // 5. Read Auth response
+        let response = read_frame(&mut tcp)?;
+        let (&resp_tag, _) = response
+            .split_first()
+            .ok_or_else(|| protocol_err("empty auth response"))?;
+        if resp_tag == CTRL_AUTH_FAILED {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Incorrect passphrase",
+            ));
+        }
+        if resp_tag != CTRL_AUTH_ACK {
+            return Err(protocol_err("expected AuthAck"));
         }
 
         tcp.set_read_timeout(Some(Duration::from_millis(200)))?;
@@ -258,6 +301,9 @@ impl Sender {
             negotiated_version,
             negotiated_features,
             key_timeout_ms,
+            server_salt,
+            server_hash,
+            client_hash,
         })
     }
 
@@ -308,6 +354,7 @@ impl Listener {
         port: u16,
         key_timeout_ms: u16,
         require_auth: bool,
+        passphrase_salt: String,
         passphrase_hash: String,
     ) -> io::Result<Self> {
         let udp = UdpSocket::bind((addr, port))?;
@@ -324,7 +371,15 @@ impl Listener {
 
         let s = shutdown.clone();
         let tcp_thread = thread::spawn(move || {
-            run_tcp_accept(tcp, s, allowed, key_timeout_ms, require_auth, passphrase_hash)
+            run_tcp_accept(
+                tcp,
+                s,
+                allowed,
+                key_timeout_ms,
+                require_auth,
+                passphrase_salt,
+                passphrase_hash,
+            )
         });
 
         Ok(Self {
@@ -454,6 +509,7 @@ fn run_tcp_accept(
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
     key_timeout_ms: u16,
     require_auth: bool,
+    passphrase_salt: String,
     passphrase_hash: String,
 ) {
     while !shutdown.load(Ordering::Relaxed) {
@@ -461,9 +517,19 @@ fn run_tcp_accept(
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
                 let s = shutdown.clone();
+                let salt = passphrase_salt.clone();
                 let hash = passphrase_hash.clone();
                 thread::spawn(move || {
-                    handle_control(stream, peer.ip(), allowed, key_timeout_ms, s, require_auth, hash)
+                    handle_control(
+                        stream,
+                        peer.ip(),
+                        allowed,
+                        key_timeout_ms,
+                        s,
+                        require_auth,
+                        salt,
+                        hash,
+                    )
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -484,6 +550,7 @@ fn handle_control(
     key_timeout_ms: u16,
     shutdown: Arc<AtomicBool>,
     require_auth: bool,
+    passphrase_salt: String,
     passphrase_hash: String,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
@@ -494,6 +561,8 @@ fn handle_control(
         eprintln!("[spud] tcp opt: {e}");
         return;
     }
+
+    // 1. Read Hello
     let payload = match read_frame(&mut stream) {
         Ok(b) => b,
         Err(e) => {
@@ -518,40 +587,55 @@ fn handle_control(
     let negotiated_version = client_version.min(PROTOCOL_VERSION);
     let negotiated_features = client_features & FEATURES;
 
-    // Parse optional auth from byte 6 onward.
-    let auth = rest.get(6..).and_then(|bytes| {
-        let (&len, rest) = bytes.split_first()?;
-        if len == 0 {
-            return Some("");
-        }
-        rest.get(..len as usize)
-            .and_then(|b| std::str::from_utf8(b).ok())
-    });
-
-    if require_auth {
-        let ok = match auth {
-            Some(pass) => crate::config::verify_passphrase(pass, &passphrase_hash),
-            None => false,
-        };
-        if !ok {
-            let fail = vec![CTRL_AUTH_FAILED];
-            let _ = write_frame(&mut stream, &fail);
-            return;
-        }
-    }
-
-    let mut ack = Vec::with_capacity(10);
+    // 2. Send HelloAck with salt + hash
+    let mut ack = Vec::with_capacity(64);
     ack.push(CTRL_HELLO_ACK);
     ack.extend_from_slice(&negotiated_version.to_le_bytes());
     ack.extend_from_slice(&negotiated_features.to_le_bytes());
     ack.extend_from_slice(&key_timeout_ms.to_le_bytes());
-    ack.push(if require_auth { 1 } else { 0 });
+    if require_auth {
+        push_name(&mut ack, &passphrase_salt);
+        push_name(&mut ack, &passphrase_hash);
+    } else {
+        push_name(&mut ack, "");
+        push_name(&mut ack, "");
+    }
     if let Err(e) = write_frame(&mut stream, &ack) {
         eprintln!("[spud] tcp ack: {e}");
         return;
     }
 
     if negotiated_version == 0 {
+        return;
+    }
+
+    // 3. Read Auth
+    let auth_payload = match read_frame(&mut stream) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let Some((&auth_tag, auth_rest)) = auth_payload.split_first() else {
+        return;
+    };
+    if auth_tag != CTRL_AUTH {
+        return;
+    }
+    let client_hash = match read_name(auth_rest) {
+        Some(h) => h,
+        None => return,
+    };
+
+    // 4. Verify
+    if require_auth && client_hash != passphrase_hash {
+        let fail = vec![CTRL_AUTH_FAILED];
+        let _ = write_frame(&mut stream, &fail);
+        return;
+    }
+
+    // 5. Send AuthAck and add to allowed
+    let auth_ack = vec![CTRL_AUTH_ACK];
+    if let Err(e) = write_frame(&mut stream, &auth_ack) {
+        eprintln!("[spud] tcp auth ack: {e}");
         return;
     }
 

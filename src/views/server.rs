@@ -58,7 +58,8 @@ struct RunningConfig {
     port: String,
     discoverable: bool,
     require_auth: bool,
-    passphrase: String,
+    passphrase_salt: String,
+    passphrase_hash: String,
     name: String,
     icon: ServerIcon,
     key_timeout_ms: u16,
@@ -72,6 +73,7 @@ pub struct State {
     discoverable: bool,
     require_auth: bool,
     passphrase: String,
+    passphrase_salt: String,
     passphrase_hash: String,
     icon: ServerIcon,
     name: String,
@@ -97,8 +99,9 @@ impl State {
             port: cfg.port.clone(),
             discoverable: cfg.discoverable,
             require_auth: cfg.require_auth,
-            passphrase: cfg.passphrase.clone(),
-            passphrase_hash: String::new(),
+            passphrase: String::new(),
+            passphrase_salt: cfg.passphrase_salt.clone(),
+            passphrase_hash: cfg.passphrase_hash.clone(),
             icon: cfg.icon,
             name: cfg.name.clone(),
             key_timeout_ms: cfg.key_timeout_ms,
@@ -117,7 +120,8 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase: self.passphrase.clone(),
+            passphrase_salt: self.passphrase_salt.clone(),
+            passphrase_hash: self.passphrase_hash.clone(),
             key_timeout_ms: self.key_timeout_ms,
         }
     }
@@ -130,7 +134,8 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase: self.passphrase.clone(),
+            passphrase_salt: self.passphrase_salt.clone(),
+            passphrase_hash: self.passphrase_hash.clone(),
             name: self.name.clone(),
             icon: self.icon,
             key_timeout_ms: self.key_timeout_ms,
@@ -142,8 +147,12 @@ impl State {
     }
 
     fn settings_changed(&self) -> bool {
-        self.running
-            && self.active_config.as_ref().is_some_and(|c| *c != self.snapshot())
+        if !self.running {
+            return false;
+        }
+        let config_changed = self.active_config.as_ref().is_some_and(|c| *c != self.snapshot());
+        let passphrase_pending = !self.passphrase.is_empty();
+        config_changed || passphrase_pending
     }
 
     pub fn owns_fullname(&self, fullname: &str) -> bool {
@@ -167,14 +176,12 @@ impl State {
         } else {
             self.bind_address.as_str()
         };
-        if !self.passphrase.is_empty() {
-            self.passphrase_hash = hash_passphrase(&self.passphrase);
-        }
         let listener = crate::net::Listener::bind(
             addr,
             port,
             self.key_timeout_ms,
             self.require_auth,
+            self.passphrase_salt.clone(),
             self.passphrase_hash.clone(),
         )?;
         self.listener = Some(listener);
@@ -185,7 +192,15 @@ impl State {
 impl State {
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::SelectPage(p) => self.page = p,
+            Message::SelectPage(p) => {
+                if self.page == Page::Security && p != Page::Security && !self.passphrase.is_empty() {
+                    let (salt, hash) = hash_passphrase(&self.passphrase);
+                    self.passphrase_salt = salt;
+                    self.passphrase_hash = hash;
+                    self.passphrase.clear();
+                }
+                self.page = p;
+            }
             Message::StartServer => match self.start_listener() {
                 Ok(()) => {
                     self.running = true;
@@ -282,7 +297,7 @@ impl State {
             ("Stopped", mt::ON_SURFACE_VARIANT, icons::TRIANGLE_EXCLAMATION)
         };
 
-        let passphrase_missing = self.require_auth && self.passphrase.is_empty();
+        let passphrase_missing = self.require_auth && self.passphrase.is_empty() && self.passphrase_hash.is_empty();
 
         let action: Element<Message> = if self.running {
             ui::outlined_button("Stop server", Message::StopServer)
@@ -537,7 +552,23 @@ impl State {
                 .into(),
         ];
 
-        if self.passphrase.is_empty() {
+        if !self.passphrase.is_empty() {
+            passphrase_items.push(ui::v_space(8.0).into());
+            passphrase_items.push(
+                row![
+                    text(icons::LOCK)
+                        .font(icons::FA_SOLID)
+                        .size(11)
+                        .color(mt::SUCCESS),
+                    text("Passphrase is set.")
+                        .size(12)
+                        .color(mt::SUCCESS),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        } else if self.passphrase_hash.is_empty() {
             passphrase_items.push(ui::v_space(8.0).into());
             if self.require_auth {
                 passphrase_items.push(
@@ -563,7 +594,7 @@ impl State {
                         .font(icons::FA_SOLID)
                         .size(11)
                         .color(mt::SUCCESS),
-                    text("Passphrase is set.")
+                    text("Passphrase is saved. Type a new one to change it.")
                         .size(12)
                         .color(mt::SUCCESS),
                 ]

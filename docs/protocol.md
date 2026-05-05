@@ -3,8 +3,8 @@
 Spud uses two channels between client and server, both on the same configured
 port:
 
-* **TCP control plane** for the handshake (version + feature negotiation) and
-  liveness signal.
+* **TCP control plane** for the handshake (version + feature negotiation + auth)
+  and liveness signal.
 * **UDP input plane** for input events streamed from the client to the server.
 
 A client must complete the TCP handshake before its UDP packets are accepted.
@@ -22,6 +22,8 @@ All multi-byte integers are little-endian.
 | `CTRL_HELLO`       | `0x01`           | Client handshake opening.                |
 | `CTRL_HELLO_ACK`   | `0x02`           | Server handshake reply.                  |
 | `CTRL_AUTH_FAILED` | `0x03`           | Server auth rejection.                   |
+| `CTRL_AUTH`        | `0x04`           | Client auth response.                    |
+| `CTRL_AUTH_ACK`    | `0x05`           | Server auth acceptance.                  |
 | `KEY_TIMEOUT`      | `1 s`            | Server releases held keys with no recent activity. |
 | Heartbeat interval | `500 ms`         | Client refresh cadence for held keys.    |
 | Connect timeout    | `5 s`            | Client TCP connect + handshake budget.   |
@@ -55,14 +57,10 @@ title Hello payload
 0-7: "Tag = 0x01"
 8-23: "Version (u16 LE)"
 24-55: "Features (u32 LE)"
-56-63: "Auth length (u8)"
-64-..: "Auth bytes (UTF-8, variable, up to 255)"
 ```
 
 * `Version`: highest protocol version the client supports.
 * `Features`: feature bitmap the client wishes to advertise.
-* `Auth length`: length of the passphrase in bytes. `0` when authentication is not configured on the client.
-* `Auth bytes`: the plaintext passphrase. The server verifies it against its stored Argon2 hash.
 
 #### `0x02` HelloAck (server -> client)
 
@@ -75,7 +73,10 @@ title HelloAck payload
 8-23: "Version (u16 LE)"
 24-55: "Features (u32 LE)"
 56-71: "Key timeout (u16 LE)"
-72-79: "Auth required (u8)"
+72-79: "Salt length (u8)"
+80-..: "Salt (UTF-8, variable, up to 255)"
+..-..: "Hash length (u8)"
+..-..: "Hash (UTF-8, variable, up to 255)"
 ```
 
 * `Version`: negotiated protocol version, defined as
@@ -84,36 +85,74 @@ title HelloAck payload
 * `Features`: negotiated feature bitmap, defined as
   `client.features & server.features`.
 * `Key timeout`: server key-release timeout in milliseconds.
-* `Auth required`: `1` if the server has authentication enabled, `0` otherwise.
-  The client may refuse to proceed if it requires authentication but the server
-  does not advertise it.
+* `Salt`: the Argon2 salt the server used when hashing its passphrase. The
+  client uses this salt to compute its own hash of the user's passphrase.
+* `Hash`: the server's stored Argon2 hash (PHC string). The client may compare
+  this against a previously stored hash to detect whether the server has
+  changed its passphrase since the last connection.
+
+If `Salt` and `Hash` are both empty, the server does not have authentication
+configured.
+
+#### `0x04` Auth (client -> server)
+
+Sent by the client after receiving `HelloAck` when authentication is required.
+
+```mermaid
+packet-beta
+title Auth payload
+0-7: "Tag = 0x04"
+8-15: "Hash length (u8)"
+16-..: "Hash (UTF-8, variable, up to 255)"
+```
+
+* `Hash`: the Argon2 hash (PHC string) of the user's passphrase computed with
+  the `Salt` received in `HelloAck`. The server compares this directly against
+  its own stored hash.
+
+#### `0x05` AuthAck (server -> client)
+
+Sent by the server when the client's `Auth` hash matches the server's stored
+hash. The payload contains only the tag byte.
 
 #### `0x03` AuthFailed (server -> client)
 
-Sent by the server when the client provides an incorrect or missing passphrase
-while the server has `require_auth` enabled. The server closes the TCP
-connection immediately after sending this message.
+Sent by the server when the client's `Auth` hash does not match, or when
+authentication is required but the client did not send `Auth`. The server
+closes the TCP connection immediately after sending this message.
 
 ### Lifecycle
 
 1. Client opens a TCP connection (with `TCP_NODELAY`) to `host:port` within the
    connect timeout.
-2. Client sends `Hello` (including passphrase if `require_auth` is enabled).
-3. Server verifies the passphrase when `require_auth` is enabled:
-   * If valid: server sends `HelloAck` and records the peer IP.
-   * If invalid or missing: server sends `AuthFailed` and closes the connection.
-4. Client reads the server's reply. `AuthFailed` is reported as an authentication
+2. Client sends `Hello`.
+3. Server sends `HelloAck` containing its salt and hash. An empty salt/hash
+   indicates authentication is not configured on the server.
+4. Client behavior after `HelloAck`:
+   * If the client requires auth but the server sent an empty salt, the client
+     treats the connection as failed (insecure server).
+   * If the client has a stored server hash and the new hash differs, the
+     client treats the connection as failed (server changed passphrase).
+   * Otherwise, the client computes `argon2(passphrase, server_salt)` and
+     sends `Auth`.
+5. Server verifies the `Auth` hash:
+   * If `require_auth` is disabled: server accepts any hash (or no `Auth`).
+   * If `require_auth` is enabled and the hash matches: server sends
+     `AuthAck` and records the peer IP.
+   * If `require_auth` is enabled and the hash does not match: server sends
+     `AuthFailed` and closes the connection.
+6. Client reads the server's reply. `AuthFailed` is reported as an authentication
    error in the UI.
-5. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
+7. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
    packets may now flow.
-6. Both sides keep the TCP socket open as a liveness signal. Either side
+8. Both sides keep the TCP socket open as a liveness signal. Either side
    closing it terminates the session.
-7. When the server observes the TCP stream close, it removes the peer IP from
+9. When the server observes the TCP stream close, it removes the peer IP from
    its authorized set; subsequent UDP packets from that IP are dropped.
-8. The client also reads from the TCP socket in a background thread; an `EOF`
-   or read error surfaces as a `Disconnected` event in the UI.
+10. The client also reads from the TCP socket in a background thread; an `EOF`
+    or read error surfaces as a `Disconnected` event in the UI.
 
-The control channel is currently silent after `HelloAck`. Future work may add
+The control channel is currently silent after `AuthAck`. Future work may add
 control messages for things like clipboard sync or screen geometry.
 
 ## UDP input plane

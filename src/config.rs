@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use argon2::{Argon2, PasswordHasher, PasswordVerifier, PasswordHash};
+use argon2::{Argon2, PasswordHasher};
 use argon2::password_hash::{SaltString, rand_core::OsRng};
 use serde::{Deserialize, Serialize};
 
@@ -62,23 +62,21 @@ impl std::fmt::Display for CaptureMode {
     }
 }
 
-pub fn hash_passphrase(passphrase: &str) -> String {
+pub fn hash_passphrase(passphrase: &str) -> (String, String) {
     let argon2 = Argon2::default();
     let salt = SaltString::generate(&mut OsRng);
-    argon2.hash_password(passphrase.as_bytes(), &salt)
+    let hash = argon2.hash_password(passphrase.as_bytes(), &salt)
         .map(|h| h.to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (salt.to_string(), hash)
 }
 
-pub fn verify_passphrase(passphrase: &str, hash: &str) -> bool {
-    if hash.is_empty() || passphrase.is_empty() {
-        return false;
-    }
+pub fn hash_passphrase_with_salt(passphrase: &str, salt: &str) -> Option<String> {
     let argon2 = Argon2::default();
-    match PasswordHash::new(hash) {
-        Ok(parsed) => argon2.verify_password(passphrase.as_bytes(), &parsed).is_ok(),
-        Err(_) => false,
-    }
+    let salt = SaltString::from_b64(salt).ok()?;
+    argon2.hash_password(passphrase.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,7 +88,8 @@ pub struct ServerConfig {
     pub port: String,
     pub discoverable: bool,
     pub require_auth: bool,
-    pub passphrase: String,
+    pub passphrase_salt: String,
+    pub passphrase_hash: String,
     pub key_timeout_ms: u16,
 }
 
@@ -103,7 +102,8 @@ impl Default for ServerConfig {
             port: "7878".to_string(),
             discoverable: true,
             require_auth: true,
-            passphrase: String::new(),
+            passphrase_salt: String::new(),
+            passphrase_hash: String::new(),
             key_timeout_ms: 1000,
         }
     }
@@ -119,7 +119,8 @@ pub struct ClientConfig {
     pub capture_mode: CaptureMode,
     pub hotkey: String,
     pub require_auth: bool,
-    pub passphrase: String,
+    pub passphrase_salt: String,
+    pub passphrase_hash: String,
     pub keepalive_interval_ms: u16,
     pub reconnect_timeout_secs: u16,
     pub blank_screen: bool,
@@ -136,7 +137,8 @@ impl Default for ClientConfig {
             capture_mode: CaptureMode::Hotkey,
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
-            passphrase: String::new(),
+            passphrase_salt: String::new(),
+            passphrase_hash: String::new(),
             keepalive_interval_ms: 50,
             reconnect_timeout_secs: 30,
             blank_screen: false,

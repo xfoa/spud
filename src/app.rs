@@ -39,7 +39,10 @@ async fn reconnect(
     host: String,
     port: u16,
     passphrase: Option<String>,
+    passphrase_changed: bool,
     require_auth: bool,
+    stored_salt: String,
+    stored_hash: String,
     timeout: std::time::Duration,
 ) -> Result<crate::net::Sender, ()> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
@@ -47,7 +50,15 @@ async fn reconnect(
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
             let pass = passphrase.as_deref();
-            match crate::net::Sender::connect(&host, port, pass, require_auth) {
+            match crate::net::Sender::connect(
+                &host,
+                port,
+                pass,
+                passphrase_changed,
+                require_auth,
+                &stored_salt,
+                &stored_hash,
+            ) {
                 Ok(sender) => {
                     let _ = tx.send(Ok(sender));
                     return;
@@ -176,9 +187,21 @@ impl Spud {
                     let gen = self.client.reconnect_generation();
                     let timeout = self.client.reconnect_timeout();
                     let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
+                    let passphrase_changed = passphrase.is_some();
                     let require_auth = self.client.require_auth();
+                    let stored_salt = self.client.passphrase_salt().to_string();
+                    let stored_hash = self.client.passphrase_hash().to_string();
                     return Task::perform(
-                        reconnect(host, port, passphrase, require_auth, timeout),
+                        reconnect(
+                            host,
+                            port,
+                            passphrase,
+                            passphrase_changed,
+                            require_auth,
+                            stored_salt,
+                            stored_hash,
+                            timeout,
+                        ),
                         move |result| match result {
                             Ok(sender) => Message::Client(client::Message::ReconnectSuccess(sender, gen)),
                             Err(()) => Message::Client(client::Message::ReconnectFailed(gen)),
