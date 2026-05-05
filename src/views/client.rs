@@ -67,6 +67,8 @@ pub enum Message {
     Capture(iced::Event),
     HotkeyEvent(crate::input::InputEvent),
     ConnectionLost,
+    ReconnectSuccess(crate::net::Sender, u64),
+    ReconnectFailed(u64),
     HeartbeatTick,
 }
 
@@ -91,6 +93,8 @@ pub struct State {
     pressed_keys: HashSet<String>,
     cursor_inside: bool,
     heartbeat_interval_ms: u64,
+    reconnecting: bool,
+    reconnect_generation: u64,
 }
 
 impl Default for State {
@@ -122,6 +126,8 @@ impl State {
             pressed_keys: HashSet::new(),
             cursor_inside: true,
             heartbeat_interval_ms: 500,
+            reconnecting: false,
+            reconnect_generation: 0,
         }
     }
 
@@ -176,6 +182,8 @@ impl State {
                 self.last_error = None;
                 self.pressed_keys.clear();
                 self.heartbeat_interval_ms = 500;
+                self.reconnecting = false;
+                self.reconnect_generation += 1;
             }
             Message::ConnectionLost => {
                 if self.connected {
@@ -184,6 +192,23 @@ impl State {
                     self.last_cursor = None;
                     self.pressed_keys.clear();
                     self.heartbeat_interval_ms = 500;
+                    self.reconnecting = true;
+                    self.reconnect_generation += 1;
+                }
+            }
+            Message::ReconnectSuccess(sender, gen) => {
+                if self.reconnecting && self.reconnect_generation == gen {
+                    self.heartbeat_interval_ms = u64::from(sender.key_timeout_ms) / 2;
+                    self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
+                    self.sender = Some(sender);
+                    self.connected = true;
+                    self.reconnecting = false;
+                    self.last_error = None;
+                }
+            }
+            Message::ReconnectFailed(gen) => {
+                if self.reconnecting && self.reconnect_generation == gen {
+                    self.reconnecting = false;
                     self.last_error = Some("Server closed the connection.".to_string());
                 }
             }
@@ -319,6 +344,22 @@ impl State {
         std::time::Duration::from_millis(self.heartbeat_interval_ms)
     }
 
+    pub fn is_reconnecting(&self) -> bool {
+        self.reconnecting
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> &str {
+        &self.port
+    }
+
+    pub fn reconnect_generation(&self) -> u64 {
+        self.reconnect_generation
+    }
+
     pub fn hotkey_string(&self) -> &str {
         &self.hotkey
     }
@@ -348,14 +389,22 @@ impl State {
     }
 
     fn connection_page(&self, content_width: f32, server_running: bool) -> Element<'_, Message> {
-        let status_label = if self.connected && !self.require_auth {
+        let status_label = if self.reconnecting {
+            "Reconnecting..."
+        } else if self.connected && !self.require_auth {
             "Connected (insecure)"
         } else if self.connected {
             "Connected"
         } else {
             "Disconnected"
         };
-        let status_color = if self.connected { mt::SUCCESS } else { mt::ON_SURFACE_VARIANT };
+        let status_color = if self.connected {
+            mt::SUCCESS
+        } else if self.reconnecting {
+            mt::WARNING
+        } else {
+            mt::ON_SURFACE_VARIANT
+        };
 
         let status_row: Element<Message> = if self.connected {
             let (icon, accent) = if self.require_auth {
@@ -367,6 +416,15 @@ impl State {
                 text("Status:").size(14).color(mt::ON_SURFACE_VARIANT),
                 text(icon).font(icons::FA_SOLID).size(13).color(accent),
                 text(status_label).size(14).color(accent),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into()
+        } else if self.reconnecting {
+            row![
+                text("Status:").size(14).color(mt::ON_SURFACE_VARIANT),
+                text(icons::ROTATE).font(icons::FA_SOLID).size(13).color(mt::WARNING),
+                text(status_label).size(14).color(mt::WARNING),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center)

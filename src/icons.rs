@@ -22,3 +22,4 @@ pub const DESKTOP: char = '\u{f108}';
 pub const LAPTOP: char = '\u{f109}';
 pub const SERVER: char = '\u{f233}';
 pub const GEAR: char = '\u{f013}';
+pub const ROTATE: char = '\u{f2f9}';

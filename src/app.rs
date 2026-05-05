@@ -35,6 +35,26 @@ fn build_wayland_hotkey_stream(
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
+async fn reconnect(host: String, port: u16) -> Result<crate::net::Sender, ()> {
+    let (tx, rx) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match crate::net::Sender::connect(&host, port) {
+                Ok(sender) => {
+                    let _ = tx.send(Ok(sender));
+                    return;
+                }
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+        let _ = tx.send(Err(()));
+    });
+    rx.await.unwrap_or(Err(()))
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     SwitchMode(Mode),
@@ -118,7 +138,17 @@ impl Spud {
                         return Task::none();
                     }
                 }
+                let was_lost = matches!(msg, client::Message::ConnectionLost);
                 self.client.update(msg);
+                if was_lost && self.client.is_reconnecting() {
+                    let host = self.client.host().to_string();
+                    let port = self.client.port().parse().unwrap_or(7878);
+                    let gen = self.client.reconnect_generation();
+                    return Task::perform(reconnect(host, port), move |result| match result {
+                        Ok(sender) => Message::Client(client::Message::ReconnectSuccess(sender, gen)),
+                        Err(()) => Message::Client(client::Message::ReconnectFailed(gen)),
+                    });
+                }
                 Task::none()
             }
             Message::Server(msg) => {

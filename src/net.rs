@@ -147,6 +147,7 @@ fn protocol_err(msg: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg)
 }
 
+#[derive(Clone, Debug)]
 pub struct Sender {
     udp_tx: mpsc::Sender<Vec<u8>>,
     shutdown: Arc<AtomicBool>,
@@ -413,7 +414,8 @@ fn run_tcp_accept(
         match listener.accept() {
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
-                thread::spawn(move || handle_control(stream, peer.ip(), allowed, key_timeout_ms));
+                let s = shutdown.clone();
+                thread::spawn(move || handle_control(stream, peer.ip(), allowed, key_timeout_ms, s));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
@@ -431,6 +433,7 @@ fn handle_control(
     peer_ip: IpAddr,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
     key_timeout_ms: u16,
+    shutdown: Arc<AtomicBool>,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
         eprintln!("[spud] tcp nodelay: {e}");
@@ -479,12 +482,20 @@ fn handle_control(
     }
 
     allowed.lock().unwrap().insert(peer_ip);
-    let _ = stream.set_read_timeout(None);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
     let mut buf = [0u8; 64];
     loop {
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
         match stream.read(&mut buf) {
             Ok(0) => break,
             Ok(_) => continue,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
             Err(_) => break,
         }
     }
