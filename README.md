@@ -6,7 +6,7 @@
 
 Spud solves the problem of wanting to play games on a computer attached your TV, from a laptop on your couch.
 It's a cross-platform remote control application that sends local input to a remote server, and is optimised for gaming, meaning that input is as low latency as possible.
-As it's intended to be used in a situation where you can alreayd see the output from the server on another device, it doesn't accept video or sound output from the server.
+As it's intended to be used in a situation where you can already see the output from the server on another device, it doesn't accept video or sound output from the server.
 
 ## Why use Spud?
 
