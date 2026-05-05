@@ -89,6 +89,7 @@ pub struct State {
     last_cursor: Option<Point>,
     last_error: Option<String>,
     pressed_keys: HashSet<String>,
+    cursor_inside: bool,
 }
 
 impl Default for State {
@@ -118,6 +119,7 @@ impl State {
             last_cursor: None,
             last_error: None,
             pressed_keys: HashSet::new(),
+            cursor_inside: true,
         }
     }
 
@@ -225,6 +227,20 @@ impl State {
                 }
             }
             Message::Capture(event) => {
+                if let iced::Event::Mouse(iced::mouse::Event::CursorEntered) = &event {
+                    self.cursor_inside = true;
+                    return;
+                }
+                if let iced::Event::Mouse(iced::mouse::Event::CursorLeft) = &event {
+                    self.cursor_inside = false;
+                    if let Some(sender) = &self.sender {
+                        for name in &self.pressed_keys {
+                            sender.send(&crate::net::Event::KeyUp(name.clone()));
+                        }
+                    }
+                    self.pressed_keys.clear();
+                    return;
+                }
                 if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key,
                     modifiers,
@@ -239,7 +255,7 @@ impl State {
                     }
                 }
                 let forward = match self.capture_mode {
-                    CaptureMode::Focus => true,
+                    CaptureMode::Focus => self.cursor_inside,
                     CaptureMode::Hotkey => crate::input::is_wayland_grabbed(),
                 };
                 if forward {
@@ -253,9 +269,21 @@ impl State {
                 }
             }
             Message::HotkeyEvent(event) => {
-                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
-                    if let Some(sender) = &self.sender {
-                        sender.send(&wire);
+                match event {
+                    crate::input::InputEvent::HotkeyToggled { grabbed: false } => {
+                        if let Some(sender) = &self.sender {
+                            for name in &self.pressed_keys {
+                                sender.send(&crate::net::Event::KeyUp(name.clone()));
+                            }
+                        }
+                        self.pressed_keys.clear();
+                    }
+                    _ => {
+                        if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
+                            if let Some(sender) = &self.sender {
+                                sender.send(&wire);
+                            }
+                        }
                     }
                 }
             }

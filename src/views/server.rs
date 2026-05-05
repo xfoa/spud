@@ -162,7 +162,6 @@ impl State {
     }
 
     fn start_listener(&mut self) -> std::io::Result<()> {
-        self.listener = None;
         let port = self.port.parse::<u16>().unwrap_or(7878);
         let addr = if self.bind_address.is_empty() {
             "0.0.0.0"
@@ -197,17 +196,20 @@ impl State {
                 self.listener = None;
                 self.last_error = None;
             }
-            Message::RestartServer => match self.start_listener() {
-                Ok(()) => {
-                    self.active_config = Some(self.snapshot());
-                    self.refresh_registration();
-                    self.last_error = None;
-                }
-                Err(e) => {
-                    self.running = false;
-                    self.active_config = None;
-                    self.registration = None;
-                    self.last_error = Some(format!("{e}"));
+            Message::RestartServer => {
+                self.listener = None;
+                    match self.start_listener() {
+                    Ok(()) => {
+                        self.active_config = Some(self.snapshot());
+                        self.refresh_registration();
+                        self.last_error = None;
+                    }
+                    Err(e) => {
+                        self.running = false;
+                        self.active_config = None;
+                        self.registration = None;
+                        self.last_error = Some(format!("{e}"));
+                    }
                 }
             },
             Message::BindAddressChanged(s) => self.bind_address = s,
