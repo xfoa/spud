@@ -213,7 +213,7 @@ impl State {
             }
             Message::RestartServer => {
                 self.listener = None;
-                    match self.start_listener() {
+                match self.start_listener() {
                     Ok(()) => {
                         self.active_config = Some(self.snapshot());
                         self.refresh_registration();
@@ -226,7 +226,7 @@ impl State {
                         self.last_error = Some(format!("{e}"));
                     }
                 }
-            },
+            }
             Message::BindAddressChanged(s) => self.bind_address = s,
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
@@ -271,6 +271,42 @@ impl State {
             Page::Security => self.security_page(),
             Page::Advanced => self.advanced_page(),
         }
+    }
+
+    pub fn restart_banner(&self) -> Option<Element<'_, Message>> {
+        if !self.settings_changed() {
+            return None;
+        }
+        let content: Element<Message> = row![
+            text(icons::TRIANGLE_EXCLAMATION)
+                .font(icons::FA_SOLID)
+                .size(13)
+                .color(mt::WARNING),
+            text("Settings have changed - restart the server to apply them.")
+                .size(13)
+                .color(mt::WARNING),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center)
+        .into();
+        let styled = iced::widget::container(content)
+            .padding(12)
+            .width(iced::Length::Fill)
+            .style(|_| iced::widget::container::Style {
+                background: Some(iced::Background::Color(mt::WARNING_CONTAINER)),
+                border: iced::Border {
+                    color: mt::WARNING,
+                    width: 1.0,
+                    radius: 8.0.into(),
+                },
+                ..Default::default()
+            });
+        Some(
+            iced::widget::container(styled)
+                .padding(16)
+                .width(iced::Length::Fill)
+                .into(),
+        )
     }
 
     fn status_page(&self, client_connected: bool) -> Element<'_, Message> {
@@ -377,24 +413,6 @@ impl State {
                         .size(13)
                         .color(mt::WARNING),
                     text("Set a passphrase in Security settings before starting the server.")
-                        .size(13)
-                        .color(mt::WARNING),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        } else if self.settings_changed() {
-            col_items.push(ui::v_space(12.0).into());
-            col_items.push(ui::divider().into());
-            col_items.push(ui::v_space(12.0).into());
-            col_items.push(
-                row![
-                    text(icons::TRIANGLE_EXCLAMATION)
-                        .font(icons::FA_SOLID)
-                        .size(13)
-                        .color(mt::WARNING),
-                    text("Settings have changed - restart the server to apply them.")
                         .size(13)
                         .color(mt::WARNING),
                 ]
@@ -603,13 +621,6 @@ impl State {
     }
 
     fn advanced_page(&self) -> Element<'_, Message> {
-        let active_timeout = self
-            .active_config
-            .as_ref()
-            .map_or(self.key_timeout_ms, |c| c.key_timeout_ms);
-
-        let timeout_changed = self.running && self.key_timeout_ms != active_timeout;
-
         let slider_row = row![
             slider(50..=2000, self.key_timeout_ms, Message::KeyTimeoutChanged)
                 .width(Length::Fill),
@@ -628,25 +639,7 @@ impl State {
         ]
         .spacing(6);
 
-        let mut card_items: Vec<Element<Message>> = vec![timeout_field.into()];
-
-        if timeout_changed {
-            card_items.push(ui::v_space(12.0).into());
-            card_items.push(
-                row![
-                    text(icons::TRIANGLE_EXCLAMATION)
-                        .font(icons::FA_SOLID)
-                        .size(13)
-                        .color(mt::WARNING),
-                    text("Restart the server to apply the new timeout.").size(13).color(mt::WARNING),
-                ]
-                .spacing(8)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        }
-
-        let timeout_card = ui::card(column(card_items).spacing(0));
+        let timeout_card = ui::card(timeout_field);
         let body = column![timeout_card].spacing(0);
         ui::page_body("Advanced", body)
     }

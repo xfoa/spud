@@ -427,6 +427,19 @@ impl Spud {
             layers.push(overlay);
         }
 
+        if self.mode == Mode::Server {
+            if let Some(banner) = self.server.restart_banner() {
+                let overlay = container(banner.map(Message::Server))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Bottom)
+                    .padding(iced::Padding { top: 0.0, right: 0.0, bottom: 0.0, left: 232.0 })
+                    .into();
+                layers.push(overlay);
+            }
+        }
+
         layers.push(handle_overlay.into());
 
         if let Some(dialog) = self.client.hotkey_dialog().map(|d| d.map(Message::Client)) {

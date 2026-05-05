@@ -16,6 +16,7 @@ pub const OUTLINE_VARIANT: Color = Color { r: 0.91, g: 0.89, b: 0.84, a: 1.0 };
 
 pub const SUCCESS: Color = Color { r: 0.30, g: 0.69, b: 0.31, a: 1.0 };
 pub const WARNING: Color = Color { r: 0.96, g: 0.62, b: 0.04, a: 1.0 };
+pub const WARNING_CONTAINER: Color = Color { r: 1.00, g: 0.95, b: 0.85, a: 1.0 };
 pub const DANGER: Color = Color { r: 0.72, g: 0.21, b: 0.21, a: 1.0 };
 
 pub fn material_theme() -> Theme {
