@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
+use argon2::{Argon2, PasswordHasher, PasswordVerifier, PasswordHash};
+use argon2::password_hash::{SaltString, rand_core::OsRng};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::icons;
 
@@ -62,9 +63,22 @@ impl std::fmt::Display for CaptureMode {
 }
 
 pub fn hash_passphrase(passphrase: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(passphrase.as_bytes());
-    hex::encode(hasher.finalize())
+    let argon2 = Argon2::default();
+    let salt = SaltString::generate(&mut OsRng);
+    argon2.hash_password(passphrase.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .unwrap_or_default()
+}
+
+pub fn verify_passphrase(passphrase: &str, hash: &str) -> bool {
+    if hash.is_empty() || passphrase.is_empty() {
+        return false;
+    }
+    let argon2 = Argon2::default();
+    match PasswordHash::new(hash) {
+        Ok(parsed) => argon2.verify_password(passphrase.as_bytes(), &parsed).is_ok(),
+        Err(_) => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
