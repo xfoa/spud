@@ -475,10 +475,11 @@ impl State {
         let mut host_input = text_input("e.g. 192.168.1.42 or hostname.local", &self.host)
             .padding(12)
             .size(14);
-        if !self.connected {
+        let is_active = self.connected || self.reconnecting;
+        if !is_active {
             host_input = host_input.on_input(Message::HostChanged);
         }
-        let host_field: Element<Message> = if !self.connected && self.host.is_empty() {
+        let host_field: Element<Message> = if !is_active && self.host.is_empty() {
             column![
                 ui::field_label("Server address"),
                 host_input,
@@ -494,13 +495,13 @@ impl State {
             .padding(12)
             .size(14)
             .width(Length::Fixed(120.0));
-        if !self.connected {
+        if !is_active {
             port_input = port_input.on_input(Message::PortChanged);
         }
         let port_out_of_range = !self.port.is_empty()
             && !self.port.parse::<u16>().is_ok_and(|p| p > 0);
 
-        let port_field: Element<Message> = if !self.connected && self.port.is_empty() {
+        let port_field: Element<Message> = if !is_active && self.port.is_empty() {
             column![
                 ui::field_label("Port"),
                 port_input,
@@ -523,7 +524,7 @@ impl State {
         let can_connect = !self.host.is_empty()
             && self.port.parse::<u16>().is_ok_and(|p| p > 0);
 
-        let action: Element<Message> = if self.connected {
+        let action: Element<Message> = if is_active {
             ui::outlined_button("Disconnect", Message::Disconnect)
         } else {
             ui::filled_button("Connect", (can_connect && !server_running).then_some(Message::Connect))
@@ -537,7 +538,7 @@ impl State {
             port_field,
         ];
 
-        if server_running && !self.connected {
+        if server_running && !is_active {
             conn_items.push(ui::v_space(12.0).into());
             conn_items.push(ui::divider().into());
             conn_items.push(ui::v_space(12.0).into());
