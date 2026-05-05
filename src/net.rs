@@ -52,8 +52,6 @@ const TAG_MOUSE_BUTTON: u8 = 0x04;
 const TAG_WHEEL: u8 = 0x05;
 const TAG_KEY_REPEAT: u8 = 0x06;
 
-const KEY_TIMEOUT: Duration = Duration::from_secs(1);
-
 const CTRL_HELLO: u8 = 0x01;
 const CTRL_HELLO_ACK: u8 = 0x02;
 
@@ -154,6 +152,7 @@ pub struct Sender {
     shutdown: Arc<AtomicBool>,
     pub negotiated_version: u16,
     pub negotiated_features: u32,
+    pub key_timeout_ms: u16,
 }
 
 impl Sender {
@@ -189,8 +188,14 @@ impl Sender {
             .ok_or_else(|| protocol_err("short ack"))?
             .try_into()
             .unwrap();
+        let key_timeout_bytes: [u8; 2] = rest
+            .get(6..8)
+            .unwrap_or(&[0xe8, 0x03])
+            .try_into()
+            .unwrap();
         let negotiated_version = u16::from_le_bytes(version_bytes);
         let negotiated_features = u32::from_le_bytes(feature_bytes);
+        let key_timeout_ms = u16::from_le_bytes(key_timeout_bytes);
         if negotiated_version == 0 {
             return Err(protocol_err("incompatible protocol version"));
         }
@@ -216,6 +221,7 @@ impl Sender {
             shutdown,
             negotiated_version,
             negotiated_features,
+            key_timeout_ms,
         })
     }
 
@@ -261,7 +267,7 @@ pub struct Listener {
 }
 
 impl Listener {
-    pub fn bind(addr: &str, port: u16) -> io::Result<Self> {
+    pub fn bind(addr: &str, port: u16, key_timeout_ms: u16) -> io::Result<Self> {
         let udp = UdpSocket::bind((addr, port))?;
         udp.set_read_timeout(Some(Duration::from_millis(200)))?;
         let tcp = TcpListener::bind((addr, port))?;
@@ -272,10 +278,10 @@ impl Listener {
 
         let s = shutdown.clone();
         let allowed_udp = allowed.clone();
-        let udp_thread = thread::spawn(move || run_udp(udp, s, allowed_udp));
+        let udp_thread = thread::spawn(move || run_udp(udp, s, allowed_udp, key_timeout_ms));
 
         let s = shutdown.clone();
-        let tcp_thread = thread::spawn(move || run_tcp_accept(tcp, s, allowed));
+        let tcp_thread = thread::spawn(move || run_tcp_accept(tcp, s, allowed, key_timeout_ms));
 
         Ok(Self {
             shutdown,
@@ -297,9 +303,14 @@ impl Drop for Listener {
     }
 }
 
-fn run_udp(socket: UdpSocket, shutdown: Arc<AtomicBool>, allowed: Arc<Mutex<HashSet<IpAddr>>>) {
+fn run_udp(
+    socket: UdpSocket,
+    shutdown: Arc<AtomicBool>,
+    allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    key_timeout_ms: u16,
+) {
     let mut buf = [0u8; 1024];
-    let mut tracker = KeyTracker::default();
+    let mut tracker = KeyTracker::new(key_timeout_ms);
     while !shutdown.load(Ordering::Relaxed) {
         match socket.recv_from(&mut buf) {
             Ok((n, src)) => {
@@ -328,12 +339,19 @@ fn run_udp(socket: UdpSocket, shutdown: Arc<AtomicBool>, allowed: Arc<Mutex<Hash
     }
 }
 
-#[derive(Default)]
 struct KeyTracker {
     pressed: HashMap<String, Instant>,
+    timeout: Duration,
 }
 
 impl KeyTracker {
+    fn new(key_timeout_ms: u16) -> Self {
+        Self {
+            pressed: HashMap::new(),
+            timeout: Duration::from_millis(u64::from(key_timeout_ms)),
+        }
+    }
+
     fn handle(&mut self, event: &Event) -> Vec<String> {
         match event {
             Event::KeyDown(name) => {
@@ -374,7 +392,7 @@ impl KeyTracker {
         let now = Instant::now();
         let mut expired = Vec::new();
         self.pressed.retain(|name, last| {
-            if now.duration_since(*last) > KEY_TIMEOUT {
+            if now.duration_since(*last) > self.timeout {
                 expired.push(format!("release {name} (timeout)"));
                 false
             } else {
@@ -389,12 +407,13 @@ fn run_tcp_accept(
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    key_timeout_ms: u16,
 ) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
-                thread::spawn(move || handle_control(stream, peer.ip(), allowed));
+                thread::spawn(move || handle_control(stream, peer.ip(), allowed, key_timeout_ms));
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(100));
@@ -407,7 +426,12 @@ fn run_tcp_accept(
     }
 }
 
-fn handle_control(mut stream: TcpStream, peer_ip: IpAddr, allowed: Arc<Mutex<HashSet<IpAddr>>>) {
+fn handle_control(
+    mut stream: TcpStream,
+    peer_ip: IpAddr,
+    allowed: Arc<Mutex<HashSet<IpAddr>>>,
+    key_timeout_ms: u16,
+) {
     if let Err(e) = stream.set_nodelay(true) {
         eprintln!("[spud] tcp nodelay: {e}");
         return;
@@ -440,10 +464,11 @@ fn handle_control(mut stream: TcpStream, peer_ip: IpAddr, allowed: Arc<Mutex<Has
     let negotiated_version = client_version.min(PROTOCOL_VERSION);
     let negotiated_features = client_features & FEATURES;
 
-    let mut ack = Vec::with_capacity(7);
+    let mut ack = Vec::with_capacity(9);
     ack.push(CTRL_HELLO_ACK);
     ack.extend_from_slice(&negotiated_version.to_le_bytes());
     ack.extend_from_slice(&negotiated_features.to_le_bytes());
+    ack.extend_from_slice(&key_timeout_ms.to_le_bytes());
     if let Err(e) = write_frame(&mut stream, &ack) {
         eprintln!("[spud] tcp ack: {e}");
         return;

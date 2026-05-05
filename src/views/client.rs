@@ -90,6 +90,7 @@ pub struct State {
     last_error: Option<String>,
     pressed_keys: HashSet<String>,
     cursor_inside: bool,
+    heartbeat_interval_ms: u64,
 }
 
 impl Default for State {
@@ -120,6 +121,7 @@ impl State {
             last_error: None,
             pressed_keys: HashSet::new(),
             cursor_inside: true,
+            heartbeat_interval_ms: 500,
         }
     }
 
@@ -157,6 +159,8 @@ impl State {
                 self.last_error = None;
                 match crate::net::Sender::connect(&self.host, port) {
                     Ok(s) => {
+                        self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
+                        self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
                         self.sender = Some(s);
                         self.connected = true;
                     }
@@ -171,6 +175,7 @@ impl State {
                 self.last_cursor = None;
                 self.last_error = None;
                 self.pressed_keys.clear();
+                self.heartbeat_interval_ms = 500;
             }
             Message::ConnectionLost => {
                 if self.connected {
@@ -178,6 +183,7 @@ impl State {
                     self.sender = None;
                     self.last_cursor = None;
                     self.pressed_keys.clear();
+                    self.heartbeat_interval_ms = 500;
                     self.last_error = Some("Server closed the connection.".to_string());
                 }
             }
@@ -307,6 +313,10 @@ impl State {
 
     pub fn is_capturing_hotkey(&self) -> bool {
         self.connected && self.capture_mode == CaptureMode::Hotkey
+    }
+
+    pub fn heartbeat_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.heartbeat_interval_ms)
     }
 
     pub fn hotkey_string(&self) -> &str {

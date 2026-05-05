@@ -1,4 +1,4 @@
-use iced::widget::{checkbox, column, row, text, text_input};
+use iced::widget::{checkbox, column, row, slider, text, text_input};
 use iced::{Element, Length};
 
 use crate::components as ui;
@@ -11,16 +11,18 @@ pub enum Page {
     Status,
     Network,
     Security,
+    Advanced,
 }
 
 impl Page {
-    const ALL: [Page; 3] = [Page::Status, Page::Network, Page::Security];
+    const ALL: [Page; 4] = [Page::Status, Page::Network, Page::Security, Page::Advanced];
 
     fn label(self) -> &'static str {
         match self {
             Page::Status => "Status",
             Page::Network => "Network",
             Page::Security => "Security",
+            Page::Advanced => "Advanced",
         }
     }
 
@@ -29,6 +31,7 @@ impl Page {
             Page::Status => icons::SIGNAL,
             Page::Network => icons::NETWORK_WIRED,
             Page::Security => icons::SHIELD_HALVED,
+            Page::Advanced => icons::GEAR,
         }
     }
 }
@@ -46,6 +49,7 @@ pub enum Message {
     PassphraseChanged(String),
     IconChanged(ServerIcon),
     NameChanged(String),
+    KeyTimeoutChanged(u16),
 }
 
 #[derive(Clone, PartialEq)]
@@ -57,6 +61,7 @@ struct RunningConfig {
     passphrase_hash: String,
     name: String,
     icon: ServerIcon,
+    key_timeout_ms: u16,
 }
 
 pub struct State {
@@ -73,6 +78,7 @@ pub struct State {
     active_config: Option<RunningConfig>,
     registration: Option<crate::discovery::Registration>,
     listener: Option<crate::net::Listener>,
+    key_timeout_ms: u16,
     last_error: Option<String>,
 }
 
@@ -95,6 +101,7 @@ impl State {
             passphrase_hash: cfg.passphrase_hash.clone(),
             icon: cfg.icon,
             name: cfg.name.clone(),
+            key_timeout_ms: cfg.key_timeout_ms,
             active_config: None,
             registration: None,
             listener: None,
@@ -116,6 +123,7 @@ impl State {
             discoverable: self.discoverable,
             require_auth: self.require_auth,
             passphrase_hash,
+            key_timeout_ms: self.key_timeout_ms,
         }
     }
 }
@@ -135,6 +143,7 @@ impl State {
             passphrase_hash,
             name: self.name.clone(),
             icon: self.icon,
+            key_timeout_ms: self.key_timeout_ms,
         }
     }
 
@@ -168,7 +177,7 @@ impl State {
         } else {
             self.bind_address.as_str()
         };
-        let listener = crate::net::Listener::bind(addr, port)?;
+        let listener = crate::net::Listener::bind(addr, port, self.key_timeout_ms)?;
         self.listener = Some(listener);
         Ok(())
     }
@@ -228,6 +237,9 @@ impl State {
             Message::PassphraseChanged(s) => self.passphrase = s,
             Message::IconChanged(c) => self.icon = c,
             Message::NameChanged(s) => self.name = s,
+            Message::KeyTimeoutChanged(v) => {
+                self.key_timeout_ms = (v / 50) * 50;
+            }
         }
     }
 
@@ -251,6 +263,7 @@ impl State {
             Page::Status => self.status_page(client_connected),
             Page::Network => self.network_page(),
             Page::Security => self.security_page(),
+            Page::Advanced => self.advanced_page(),
         }
     }
 
@@ -567,5 +580,54 @@ impl State {
 
         let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
         ui::page_body("Security", body)
+    }
+
+    fn advanced_page(&self) -> Element<'_, Message> {
+        let active_timeout = self
+            .active_config
+            .as_ref()
+            .map_or(self.key_timeout_ms, |c| c.key_timeout_ms);
+
+        let timeout_changed = self.running && self.key_timeout_ms != active_timeout;
+
+        let slider_row = row![
+            slider(50..=2000, self.key_timeout_ms, Message::KeyTimeoutChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{} ms", self.key_timeout_ms)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let timeout_field = column![
+            ui::field_label("Key timeout"),
+            slider_row,
+            ui::v_space(4.0),
+            ui::helper_text(
+                "Compensates for lost packets. Lower values are better for less reliable network conditions."
+            ),
+        ]
+        .spacing(6);
+
+        let mut card_items: Vec<Element<Message>> = vec![timeout_field.into()];
+
+        if timeout_changed {
+            card_items.push(ui::v_space(12.0).into());
+            card_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::WARNING),
+                    text("Restart the server to apply the new timeout.").size(13).color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        let timeout_card = ui::card(column(card_items).spacing(0));
+        let body = column![timeout_card].spacing(0);
+        ui::page_body("Advanced", body)
     }
 }

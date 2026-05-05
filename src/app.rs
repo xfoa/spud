@@ -171,7 +171,7 @@ impl Spud {
 
         if self.client.is_connected() {
             subs.push(
-                iced::time::every(std::time::Duration::from_millis(500))
+                iced::time::every(self.client.heartbeat_interval())
                     .map(|_| Message::Client(client::Message::HeartbeatTick)),
             );
         }
