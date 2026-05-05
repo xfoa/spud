@@ -91,7 +91,6 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
-    passphrase_salt: String,
     passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
@@ -130,7 +129,6 @@ impl State {
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
             passphrase: String::new(),
-            passphrase_salt: cfg.passphrase_salt.clone(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
             hotkey_dialog_open: false,
@@ -160,7 +158,6 @@ impl State {
             capture_mode: self.capture_mode,
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
-            passphrase_salt: self.passphrase_salt.clone(),
             passphrase_hash: self.passphrase_hash.clone(),
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
@@ -199,13 +196,11 @@ impl State {
                     passphrase,
                     passphrase_changed,
                     self.require_auth,
-                    &self.passphrase_salt,
                     &self.passphrase_hash,
                 ) {
                     Ok(s) => {
                         self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
                         self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
-                        self.passphrase_salt = s.server_salt.clone();
                         self.passphrase_hash = s.client_hash.clone();
                         self.passphrase.clear();
                         self.sender = Some(s);
@@ -439,10 +434,6 @@ impl State {
         } else {
             None
         }
-    }
-
-    pub fn passphrase_salt(&self) -> &str {
-        &self.passphrase_salt
     }
 
     pub fn passphrase_hash(&self) -> &str {

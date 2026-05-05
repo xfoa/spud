@@ -41,7 +41,6 @@ async fn reconnect(
     passphrase: Option<String>,
     passphrase_changed: bool,
     require_auth: bool,
-    stored_salt: String,
     stored_hash: String,
     timeout: std::time::Duration,
 ) -> Result<crate::net::Sender, ()> {
@@ -56,7 +55,6 @@ async fn reconnect(
                 pass,
                 passphrase_changed,
                 require_auth,
-                &stored_salt,
                 &stored_hash,
             ) {
                 Ok(sender) => {
@@ -189,7 +187,6 @@ impl Spud {
                     let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
                     let passphrase_changed = passphrase.is_some();
                     let require_auth = self.client.require_auth();
-                    let stored_salt = self.client.passphrase_salt().to_string();
                     let stored_hash = self.client.passphrase_hash().to_string();
                     return Task::perform(
                         reconnect(
@@ -198,7 +195,6 @@ impl Spud {
                             passphrase,
                             passphrase_changed,
                             require_auth,
-                            stored_salt,
                             stored_hash,
                             timeout,
                         ),

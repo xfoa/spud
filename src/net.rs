@@ -170,7 +170,6 @@ pub struct Sender {
     pub negotiated_version: u16,
     pub negotiated_features: u32,
     pub key_timeout_ms: u16,
-    pub server_salt: String,
     pub server_hash: String,
     pub client_hash: String,
 }
@@ -182,7 +181,6 @@ impl Sender {
         passphrase: Option<&str>,
         passphrase_changed: bool,
         require_auth: bool,
-        _stored_salt: &str,
         stored_hash: &str,
     ) -> io::Result<Self> {
         let addr = (host, port)
@@ -223,9 +221,7 @@ impl Sender {
             .unwrap_or(&[0xe8, 0x03])
             .try_into()
             .unwrap();
-        let (server_salt, rest) = read_name_split(&rest[8..])
-            .ok_or_else(|| protocol_err("missing salt"))?;
-        let (server_hash, _) = read_name_split(rest)
+        let (server_hash, _) = read_name_split(&rest[8..])
             .ok_or_else(|| protocol_err("missing hash"))?;
 
         let negotiated_version = u16::from_le_bytes(version_bytes);
@@ -235,7 +231,7 @@ impl Sender {
             return Err(protocol_err("incompatible protocol version"));
         }
 
-        if require_auth && server_salt.is_empty() {
+        if require_auth && server_hash.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "Server does not require authentication",
@@ -247,7 +243,9 @@ impl Sender {
             let pass = passphrase.ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "Passphrase required")
             })?;
-            crate::config::hash_passphrase_with_salt(pass, &server_salt)
+            let salt = crate::config::extract_salt(&server_hash)
+                .ok_or_else(|| protocol_err("invalid server hash"))?;
+            crate::config::hash_passphrase_with_salt(pass, &salt)
                 .ok_or_else(|| protocol_err("failed to hash passphrase"))?
         } else if require_auth && server_hash != stored_hash {
             return Err(io::Error::new(
@@ -301,7 +299,6 @@ impl Sender {
             negotiated_version,
             negotiated_features,
             key_timeout_ms,
-            server_salt,
             server_hash,
             client_hash,
         })
@@ -354,7 +351,6 @@ impl Listener {
         port: u16,
         key_timeout_ms: u16,
         require_auth: bool,
-        passphrase_salt: String,
         passphrase_hash: String,
     ) -> io::Result<Self> {
         let udp = UdpSocket::bind((addr, port))?;
@@ -377,7 +373,6 @@ impl Listener {
                 allowed,
                 key_timeout_ms,
                 require_auth,
-                passphrase_salt,
                 passphrase_hash,
             )
         });
@@ -509,7 +504,6 @@ fn run_tcp_accept(
     allowed: Arc<Mutex<HashSet<IpAddr>>>,
     key_timeout_ms: u16,
     require_auth: bool,
-    passphrase_salt: String,
     passphrase_hash: String,
 ) {
     while !shutdown.load(Ordering::Relaxed) {
@@ -517,7 +511,6 @@ fn run_tcp_accept(
             Ok((stream, peer)) => {
                 let allowed = allowed.clone();
                 let s = shutdown.clone();
-                let salt = passphrase_salt.clone();
                 let hash = passphrase_hash.clone();
                 thread::spawn(move || {
                     handle_control(
@@ -527,7 +520,6 @@ fn run_tcp_accept(
                         key_timeout_ms,
                         s,
                         require_auth,
-                        salt,
                         hash,
                     )
                 });
@@ -550,7 +542,6 @@ fn handle_control(
     key_timeout_ms: u16,
     shutdown: Arc<AtomicBool>,
     require_auth: bool,
-    passphrase_salt: String,
     passphrase_hash: String,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
@@ -587,17 +578,15 @@ fn handle_control(
     let negotiated_version = client_version.min(PROTOCOL_VERSION);
     let negotiated_features = client_features & FEATURES;
 
-    // 2. Send HelloAck with salt + hash
+    // 2. Send HelloAck with hash
     let mut ack = Vec::with_capacity(64);
     ack.push(CTRL_HELLO_ACK);
     ack.extend_from_slice(&negotiated_version.to_le_bytes());
     ack.extend_from_slice(&negotiated_features.to_le_bytes());
     ack.extend_from_slice(&key_timeout_ms.to_le_bytes());
     if require_auth {
-        push_name(&mut ack, &passphrase_salt);
         push_name(&mut ack, &passphrase_hash);
     } else {
-        push_name(&mut ack, "");
         push_name(&mut ack, "");
     }
     if let Err(e) = write_frame(&mut stream, &ack) {

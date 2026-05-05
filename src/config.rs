@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use argon2::{Argon2, PasswordHasher};
-use argon2::password_hash::{SaltString, rand_core::OsRng};
+use argon2::password_hash::{PasswordHash, SaltString, rand_core::OsRng};
 use serde::{Deserialize, Serialize};
 
 use crate::icons;
@@ -62,13 +62,16 @@ impl std::fmt::Display for CaptureMode {
     }
 }
 
-pub fn hash_passphrase(passphrase: &str) -> (String, String) {
+pub fn hash_passphrase(passphrase: &str) -> String {
     let argon2 = Argon2::default();
     let salt = SaltString::generate(&mut OsRng);
-    let hash = argon2.hash_password(passphrase.as_bytes(), &salt)
+    argon2.hash_password(passphrase.as_bytes(), &salt)
         .map(|h| h.to_string())
-        .unwrap_or_default();
-    (salt.to_string(), hash)
+        .unwrap_or_default()
+}
+
+pub fn extract_salt(hash: &str) -> Option<String> {
+    PasswordHash::new(hash).ok()?.salt.map(|s| s.as_str().to_string())
 }
 
 pub fn hash_passphrase_with_salt(passphrase: &str, salt: &str) -> Option<String> {
@@ -88,7 +91,6 @@ pub struct ServerConfig {
     pub port: String,
     pub discoverable: bool,
     pub require_auth: bool,
-    pub passphrase_salt: String,
     pub passphrase_hash: String,
     pub key_timeout_ms: u16,
 }
@@ -102,7 +104,6 @@ impl Default for ServerConfig {
             port: "7878".to_string(),
             discoverable: true,
             require_auth: true,
-            passphrase_salt: String::new(),
             passphrase_hash: String::new(),
             key_timeout_ms: 1000,
         }
@@ -119,7 +120,6 @@ pub struct ClientConfig {
     pub capture_mode: CaptureMode,
     pub hotkey: String,
     pub require_auth: bool,
-    pub passphrase_salt: String,
     pub passphrase_hash: String,
     pub keepalive_interval_ms: u16,
     pub reconnect_timeout_secs: u16,
@@ -137,7 +137,6 @@ impl Default for ClientConfig {
             capture_mode: CaptureMode::Hotkey,
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
-            passphrase_salt: String::new(),
             passphrase_hash: String::new(),
             keepalive_interval_ms: 50,
             reconnect_timeout_secs: 30,

@@ -58,7 +58,6 @@ struct RunningConfig {
     port: String,
     discoverable: bool,
     require_auth: bool,
-    passphrase_salt: String,
     passphrase_hash: String,
     name: String,
     icon: ServerIcon,
@@ -73,7 +72,6 @@ pub struct State {
     discoverable: bool,
     require_auth: bool,
     passphrase: String,
-    passphrase_salt: String,
     passphrase_hash: String,
     icon: ServerIcon,
     name: String,
@@ -100,7 +98,6 @@ impl State {
             discoverable: cfg.discoverable,
             require_auth: cfg.require_auth,
             passphrase: String::new(),
-            passphrase_salt: cfg.passphrase_salt.clone(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             icon: cfg.icon,
             name: cfg.name.clone(),
@@ -120,7 +117,6 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase_salt: self.passphrase_salt.clone(),
             passphrase_hash: self.passphrase_hash.clone(),
             key_timeout_ms: self.key_timeout_ms,
         }
@@ -134,7 +130,6 @@ impl State {
             port: self.port.clone(),
             discoverable: self.discoverable,
             require_auth: self.require_auth,
-            passphrase_salt: self.passphrase_salt.clone(),
             passphrase_hash: self.passphrase_hash.clone(),
             name: self.name.clone(),
             icon: self.icon,
@@ -181,7 +176,6 @@ impl State {
             port,
             self.key_timeout_ms,
             self.require_auth,
-            self.passphrase_salt.clone(),
             self.passphrase_hash.clone(),
         )?;
         self.listener = Some(listener);
@@ -194,9 +188,7 @@ impl State {
         match message {
             Message::SelectPage(p) => {
                 if self.page == Page::Security && p != Page::Security && !self.passphrase.is_empty() {
-                    let (salt, hash) = hash_passphrase(&self.passphrase);
-                    self.passphrase_salt = salt;
-                    self.passphrase_hash = hash;
+                    self.passphrase_hash = hash_passphrase(&self.passphrase);
                     self.passphrase.clear();
                 }
                 self.page = p;

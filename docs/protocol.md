@@ -73,10 +73,8 @@ title HelloAck payload
 8-23: "Version (u16 LE)"
 24-55: "Features (u32 LE)"
 56-71: "Key timeout (u16 LE)"
-72-79: "Salt length (u8)"
-80-..: "Salt (UTF-8, variable, up to 255)"
-..-..: "Hash length (u8)"
-..-..: "Hash (UTF-8, variable, up to 255)"
+72-79: "Hash length (u8)"
+80-..: "Hash (UTF-8, variable, up to 255)"
 ```
 
 * `Version`: negotiated protocol version, defined as
@@ -85,14 +83,12 @@ title HelloAck payload
 * `Features`: negotiated feature bitmap, defined as
   `client.features & server.features`.
 * `Key timeout`: server key-release timeout in milliseconds.
-* `Salt`: the Argon2 salt the server used when hashing its passphrase. The
-  client uses this salt to compute its own hash of the user's passphrase.
-* `Hash`: the server's stored Argon2 hash (PHC string). The client may compare
-  this against a previously stored hash to detect whether the server has
-  changed its passphrase since the last connection.
+* `Hash`: the server's stored Argon2 hash (PHC string). The salt is embedded
+  inside this string; the client extracts it to compute its own hash. The
+  client may also compare this hash against a previously stored copy to detect
+  whether the server has changed its passphrase since the last connection.
 
-If `Salt` and `Hash` are both empty, the server does not have authentication
-configured.
+An empty `Hash` means the server does not have authentication configured.
 
 #### `0x04` Auth (client -> server)
 
@@ -126,15 +122,15 @@ closes the TCP connection immediately after sending this message.
 1. Client opens a TCP connection (with `TCP_NODELAY`) to `host:port` within the
    connect timeout.
 2. Client sends `Hello`.
-3. Server sends `HelloAck` containing its salt and hash. An empty salt/hash
-   indicates authentication is not configured on the server.
+3. Server sends `HelloAck` containing its hash. An empty hash indicates
+   authentication is not configured on the server.
 4. Client behavior after `HelloAck`:
-   * If the client requires auth but the server sent an empty salt, the client
+   * If the client requires auth but the server sent an empty hash, the client
      treats the connection as failed (insecure server).
    * If the client has a stored server hash and the new hash differs, the
      client treats the connection as failed (server changed passphrase).
-   * Otherwise, the client computes `argon2(passphrase, server_salt)` and
-     sends `Auth`.
+   * Otherwise, the client extracts the salt from the server's hash, computes
+     `argon2(passphrase, salt)`, and sends `Auth`.
 5. Server verifies the `Auth` hash:
    * If `require_auth` is disabled: server accepts any hash (or no `Auth`).
    * If `require_auth` is enabled and the hash matches: server sends
