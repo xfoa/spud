@@ -108,6 +108,8 @@ pub struct ClientConfig {
     pub passphrase_hash: String,
     pub keepalive_interval_ms: u16,
     pub reconnect_timeout_secs: u16,
+    pub blank_screen: bool,
+    pub show_hotkey_on_blank: bool,
 }
 
 impl Default for ClientConfig {
@@ -123,6 +125,8 @@ impl Default for ClientConfig {
             passphrase_hash: String::new(),
             keepalive_interval_ms: 50,
             reconnect_timeout_secs: 30,
+            blank_screen: false,
+            show_hotkey_on_blank: true,
         }
     }
 }

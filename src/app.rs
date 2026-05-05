@@ -1,6 +1,6 @@
 use iced::futures::Stream;
 use iced::futures::StreamExt;
-use iced::widget::{column, container, row, scrollable, stack};
+use iced::widget::{column, container, mouse_area, row, scrollable, stack, text};
 use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
 
 use crate::components as ui;
@@ -77,6 +77,8 @@ pub struct Spud {
     window_size: Size,
     wayland_handles: Option<WaylandHandles>,
     handles_attempted: bool,
+    window_id: Option<iced::window::Id>,
+    blank_screen_fullscreen: bool,
 }
 
 impl Default for Spud {
@@ -90,6 +92,8 @@ impl Default for Spud {
             window_size: Size::new(1000.0, 650.0),
             wayland_handles: None,
             handles_attempted: false,
+            window_id: None,
+            blank_screen_fullscreen: false,
         }
     }
 }
@@ -102,6 +106,24 @@ impl Spud {
             server: self.server.to_config(),
         }
     }
+
+    fn sync_blank_screen(&mut self) -> Task<Message> {
+        let Some(id) = self.window_id else {
+            return Task::none();
+        };
+        let should_be_fullscreen =
+            self.mode == Mode::Client && self.client.is_blank_screen_active();
+        if should_be_fullscreen == self.blank_screen_fullscreen {
+            return Task::none();
+        }
+        self.blank_screen_fullscreen = should_be_fullscreen;
+        let mode = if should_be_fullscreen {
+            iced::window::Mode::Fullscreen
+        } else {
+            iced::window::Mode::Windowed
+        };
+        iced::window::set_mode(id, mode)
+    }
 }
 
 impl Spud {
@@ -112,7 +134,8 @@ impl Spud {
         if before != after {
             after.save();
         }
-        task
+        let sync_task = self.sync_blank_screen();
+        Task::batch(vec![task, sync_task])
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -171,6 +194,7 @@ impl Spud {
                     return Task::none();
                 }
                 self.handles_attempted = true;
+                self.window_id = Some(id);
                 iced::window::run(id, |window| crate::input::extract_wayland_handles(window))
                     .map(Message::WaylandHandlesReady)
             }
@@ -339,8 +363,40 @@ impl Spud {
 
         let mut layers: Vec<Element<Message>> = vec![
             window_content.into(),
-            handle_overlay.into(),
         ];
+
+        if self.mode == Mode::Client && self.client.is_capturing_hotkey() && self.client.is_grabbed() {
+            let show_text = self.client.is_blank_screen_active() && self.client.show_hotkey_on_blank();
+            let overlay_text: Element<Message> = if show_text {
+                text(String::new() + "Press " + self.client.hotkey_display() + " to stop capturing")
+                    .size(24)
+                    .color(iced::Color::from_rgb(0.15, 0.15, 0.15))
+                    .into()
+            } else {
+                text("").size(1).into()
+            };
+            let bg = if self.client.is_blank_screen_active() {
+                iced::Color::BLACK
+            } else {
+                iced::Color::from_rgba(0.0, 0.0, 0.0, 0.0)
+            };
+            let overlay = mouse_area(
+                container(overlay_text)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .style(move |_| container::Style {
+                        background: Some(Background::Color(bg)),
+                        ..Default::default()
+                    }),
+            )
+            .interaction(iced::mouse::Interaction::Hidden)
+            .into();
+            layers.push(overlay);
+        }
+
+        layers.push(handle_overlay.into());
 
         if let Some(dialog) = self.client.hotkey_dialog().map(|d| d.map(Message::Client)) {
             layers.push(dialog);

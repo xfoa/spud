@@ -76,6 +76,8 @@ pub enum Message {
     KeepaliveTick,
     KeepaliveIntervalChanged(u16),
     ReconnectTimeoutChanged(String),
+    BlankScreenToggled(bool),
+    ShowHotkeyOnBlankToggled(bool),
 }
 
 pub struct State {
@@ -103,6 +105,9 @@ pub struct State {
     reconnect_generation: u64,
     keepalive_interval_ms: u16,
     reconnect_timeout_secs: String,
+    blank_screen: bool,
+    show_hotkey_on_blank: bool,
+    grabbed: bool,
 }
 
 impl Default for State {
@@ -138,6 +143,9 @@ impl State {
             reconnect_generation: 0,
             keepalive_interval_ms: cfg.keepalive_interval_ms,
             reconnect_timeout_secs: cfg.reconnect_timeout_secs.to_string(),
+            blank_screen: cfg.blank_screen,
+            show_hotkey_on_blank: cfg.show_hotkey_on_blank,
+            grabbed: false,
         }
     }
 
@@ -158,6 +166,8 @@ impl State {
             passphrase_hash,
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
+            blank_screen: self.blank_screen,
+            show_hotkey_on_blank: self.show_hotkey_on_blank,
         }
     }
 }
@@ -196,6 +206,7 @@ impl State {
                 self.heartbeat_interval_ms = 500;
                 self.reconnecting = false;
                 self.reconnect_generation += 1;
+                self.grabbed = false;
             }
             Message::ConnectionLost => {
                 if self.connected {
@@ -206,6 +217,7 @@ impl State {
                     self.heartbeat_interval_ms = 500;
                     self.reconnecting = true;
                     self.reconnect_generation += 1;
+                    self.grabbed = false;
                 }
             }
             Message::ReconnectSuccess(sender, gen) => {
@@ -215,12 +227,14 @@ impl State {
                     self.sender = Some(sender);
                     self.connected = true;
                     self.reconnecting = false;
+                    self.grabbed = false;
                     self.last_error = None;
                 }
             }
             Message::ReconnectFailed(gen) => {
                 if self.reconnecting && self.reconnect_generation == gen {
                     self.reconnecting = false;
+                    self.grabbed = false;
                     self.last_error = Some("Server closed the connection.".to_string());
                 }
             }
@@ -294,6 +308,7 @@ impl State {
                         && format_chord(key, *modifiers).as_deref() == Some(self.hotkey.as_str())
                     {
                         crate::input::toggle_wayland_grab();
+                        self.grabbed = crate::input::is_wayland_grabbed();
                         return;
                     }
                 }
@@ -312,8 +327,9 @@ impl State {
                 }
             }
             Message::HotkeyEvent(event) => {
-                match event {
-                    crate::input::InputEvent::HotkeyToggled { grabbed: false } => {
+                if let crate::input::InputEvent::HotkeyToggled { grabbed } = event {
+                    self.grabbed = grabbed;
+                    if !grabbed {
                         if let Some(sender) = &self.sender {
                             for name in &self.pressed_keys {
                                 sender.send(&crate::net::Event::KeyUp(name.clone()));
@@ -321,12 +337,11 @@ impl State {
                         }
                         self.pressed_keys.clear();
                     }
-                    _ => {
-                        if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
-                            if let Some(sender) = &self.sender {
-                                sender.send(&wire);
-                            }
-                        }
+                    return;
+                }
+                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
+                    if let Some(sender) = &self.sender {
+                        sender.send(&wire);
                     }
                 }
             }
@@ -350,6 +365,8 @@ impl State {
                     self.reconnect_timeout_secs = s;
                 }
             }
+            Message::BlankScreenToggled(v) => self.blank_screen = v,
+            Message::ShowHotkeyOnBlankToggled(v) => self.show_hotkey_on_blank = v,
         }
     }
 
@@ -375,6 +392,26 @@ impl State {
 
     pub fn reconnect_timeout(&self) -> std::time::Duration {
         std::time::Duration::from_secs(u64::from(self.reconnect_timeout_secs.parse::<u16>().unwrap_or(30)))
+    }
+
+    pub fn capture_mode(&self) -> CaptureMode {
+        self.capture_mode
+    }
+
+    pub fn is_grabbed(&self) -> bool {
+        self.grabbed
+    }
+
+    pub fn is_blank_screen_active(&self) -> bool {
+        self.connected && self.capture_mode == CaptureMode::Hotkey && self.grabbed && self.blank_screen
+    }
+
+    pub fn show_hotkey_on_blank(&self) -> bool {
+        self.show_hotkey_on_blank
+    }
+
+    pub fn hotkey_display(&self) -> &str {
+        &self.hotkey
     }
 
     pub fn is_reconnecting(&self) -> bool {
@@ -686,24 +723,61 @@ impl State {
             .spacing(0),
         );
 
-        let hotkey_card = ui::card(
-            column![
-                text("Capture hotkey").size(16).color(mt::ON_SURFACE),
-                ui::v_space(4.0),
-                ui::helper_text("Used when capture mode is set to Hotkey."),
-                ui::v_space(16.0),
-                row![
-                    text(&self.hotkey).size(14).color(mt::ON_SURFACE),
-                    ui::h_space_fill(),
-                    ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
-                ]
-                .align_y(iced::Alignment::Center),
-            ]
-            .spacing(0),
-        );
+        let mut body_items: Vec<Element<Message>> = vec![capture_card.into()];
 
-        let body = column![capture_card, ui::v_space(16.0), hotkey_card].spacing(0);
-        ui::page_body("Hotkeys", body)
+        if self.capture_mode == CaptureMode::Hotkey {
+            let hotkey_card = ui::card(
+                column![
+                    text("Capture hotkey").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(4.0),
+                    ui::helper_text("Press this combo to toggle input capture."),
+                    ui::v_space(16.0),
+                    row![
+                        text(&self.hotkey).size(14).color(mt::ON_SURFACE),
+                        ui::h_space_fill(),
+                        ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
+                    ]
+                    .align_y(iced::Alignment::Center),
+                ]
+                .spacing(0),
+            );
+
+            let blank_screen_row = row![
+                column![
+                    text("Blank screen while captured").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Show a black overlay while input is captured."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.blank_screen).on_toggle(Message::BlankScreenToggled),
+            ]
+            .align_y(iced::Alignment::Center);
+
+            let show_hotkey_row = row![
+                column![
+                    text("Show hotkey on blank screen").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Display the exit combo on the black overlay."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.show_hotkey_on_blank).on_toggle(Message::ShowHotkeyOnBlankToggled),
+            ]
+            .align_y(iced::Alignment::Center);
+
+            let blank_card = if self.blank_screen {
+                ui::card(column![blank_screen_row, ui::v_space(16.0), show_hotkey_row].spacing(0))
+            } else {
+                ui::card(column![blank_screen_row].spacing(0))
+            };
+
+            body_items.push(ui::v_space(16.0).into());
+            body_items.push(hotkey_card.into());
+            body_items.push(ui::v_space(16.0).into());
+            body_items.push(blank_card.into());
+        }
+
+        let body = column(body_items).spacing(0);
+        ui::page_body("Capture", body)
     }
 
     pub fn hotkey_dialog(&self) -> Option<Element<'_, Message>> {
@@ -886,7 +960,12 @@ impl State {
         .spacing(6);
 
         let advanced_card = ui::card(
-            column![keepalive_field, ui::v_space(16.0), timeout_field].spacing(0),
+            column![
+                keepalive_field,
+                ui::v_space(16.0),
+                timeout_field,
+            ]
+            .spacing(0),
         );
         let body = column![advanced_card].spacing(0);
         ui::page_body("Advanced", body)

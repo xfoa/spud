@@ -168,9 +168,7 @@ fn run_wayland(
                     );
                     locked = Some(lock);
                 }
-                if let Some(serial) = state.last_enter_serial {
-                    pointer.set_cursor(serial, None, 0, 0);
-                }
+                let _ = state.last_enter_serial;
                 if inhibitor.is_none() {
                     if let Some(manager) = &inhibit_manager {
                         inhibitor = Some(manager.inhibit_shortcuts(&surface, &seat, &qh, ()));
