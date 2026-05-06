@@ -184,12 +184,16 @@ impl ClientConnection {
 
         let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms) = Self::handshake(tls, addr).await?;
         if client_encrypt != server_encrypt {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "encryption setting mismatch"));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
+                "This server doesn't use encryption, disable it in Security to connect"
+            } else {
+                "This server uses encryption, enable it in Security to connect" 
+            }));
         }
         let encrypt = client_encrypt;
         let cipher = encrypt.then(|| client_cipher).flatten();
         if encrypt && cipher.is_none() {
-            return Err(io::Error::new(io::ErrorKind::Other, "failed to derive encryption keys"));
+            return Err(io::Error::new(io::ErrorKind::Other, "Failed to derive encryption keys"));
         }
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
