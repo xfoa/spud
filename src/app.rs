@@ -38,7 +38,7 @@ fn build_wayland_hotkey_stream(
 async fn reconnect(
     host: String,
     port: u16,
-    _passphrase: Option<String>,
+    passphrase: Option<String>,
     _passphrase_changed: bool,
     _require_auth: bool,
     _stored_hash: String,
@@ -47,7 +47,7 @@ async fn reconnect(
 ) -> Result<crate::net::Sender, ()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        match crate::net::Sender::connect(&host, port, client_encrypt).await {
+        match crate::net::Sender::connect(&host, port, client_encrypt, passphrase.clone()).await {
             Ok(sender) => return Ok(sender),
             Err(_) => {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;

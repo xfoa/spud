@@ -631,7 +631,7 @@ impl State {
                 column![
                     text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
-                    ui::helper_text("Encrypt input events with AES-256-GCM over UDP."),
+                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but may be faster."),
                 ]
                 .width(Length::Fill),
                 checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),

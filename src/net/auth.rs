@@ -4,7 +4,7 @@ use rand_core::RngCore;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use crate::config::{extract_salt, hash_passphrase_with_salt};
+use crate::config::hash_passphrase_with_salt;
 
 /// Generate a 32-byte random challenge.
 pub fn generate_challenge() -> [u8; 32] {
@@ -14,10 +14,27 @@ pub fn generate_challenge() -> [u8; 32] {
 }
 
 /// Client computes HMAC-SHA256(Argon2(passphrase, salt), challenge).
-pub fn client_compute_response(passphrase: &str, salt: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
-    let hash = hash_passphrase_with_salt(passphrase, salt)?;
+/// The salt is extracted from the server's PHC string.
+pub fn client_compute_response(passphrase: &str, phc: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
+    let parsed = argon2::password_hash::PasswordHash::new(phc).ok()?;
+    let salt = parsed.salt.map(|s| s.as_str().to_string())?;
+    let hash = hash_passphrase_with_salt(passphrase, &salt)?;
     let parsed = argon2::password_hash::PasswordHash::new(&hash).ok()?;
-    let hash_bytes = parsed.hash?.as_bytes();
+    let hash = parsed.hash?;
+    let hash_bytes = hash.as_bytes();
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(hash_bytes).ok()?;
+    mac.update(challenge);
+    Some(mac.finalize().into_bytes().into())
+}
+
+/// Server computes the expected response from its stored PHC hash.
+/// The PHC string's hash output is used directly as the HMAC key,
+/// so the plaintext passphrase is not required.
+pub fn server_compute_expected(stored_phc: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
+    let parsed = argon2::password_hash::PasswordHash::new(stored_phc).ok()?;
+    let hash = parsed.hash?;
+    let hash_bytes = hash.as_bytes();
 
     let mut mac = Hmac::<Sha256>::new_from_slice(hash_bytes).ok()?;
     mac.update(challenge);
@@ -25,21 +42,10 @@ pub fn client_compute_response(passphrase: &str, salt: &str, challenge: &[u8; 32
 }
 
 /// Server verifies the client's response against its stored PHC hash.
-pub fn server_verify_response(
-    stored_phc: &str,
-    challenge: &[u8; 32],
-    client_response: &[u8; 32],
-    passphrase: &str,
-) -> bool {
-    let salt = match extract_salt(stored_phc) {
-        Some(s) => s,
-        None => return false,
-    };
-
-    let expected = match client_compute_response(passphrase, &salt, challenge) {
+pub fn server_verify_response(stored_phc: &str, challenge: &[u8; 32], client_response: &[u8; 32]) -> bool {
+    let expected = match server_compute_expected(stored_phc, challenge) {
         Some(r) => r,
         None => return false,
     };
-
     expected.ct_eq(client_response).into()
 }

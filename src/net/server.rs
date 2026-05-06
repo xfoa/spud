@@ -191,11 +191,38 @@ async fn handle_client(
 
     let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
-    // TODO: Phase 3 - auth challenge-response
-    // For now, skip auth if not required
+    // Auth challenge-response
     if require_auth && !passphrase_hash.is_empty() {
-        // Auth placeholder: in full implementation, send challenge, read response, verify
-        // For now, just proceed
+        let challenge = crate::net::auth::generate_challenge();
+        let challenge_msg = ControlMsg::AuthChallenge { nonce: challenge, phc: passphrase_hash.clone() };
+        let bytes = match postcard::to_allocvec(&challenge_msg) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        if framed.send(bytes.into()).await.is_err() {
+            return;
+        }
+
+        let response = match tokio::time::timeout(Duration::from_secs(10), framed.next()).await {
+            Ok(Some(Ok(frame))) => frame,
+            _ => return,
+        };
+        let auth_ok = match postcard::from_bytes::<ControlMsg>(&response) {
+            Ok(ControlMsg::AuthResponse { hmac }) => {
+                crate::net::auth::server_verify_response(&passphrase_hash, &challenge, &hmac)
+            }
+            _ => false,
+        };
+
+        let result_msg = ControlMsg::AuthResult { ok: auth_ok };
+        let bytes = match postcard::to_allocvec(&result_msg) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let _ = framed.send(bytes.into()).await;
+        if !auth_ok {
+            return;
+        }
     }
 
     let (uuid, conn_id) = generate_session();

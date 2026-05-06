@@ -100,7 +100,7 @@ impl Clone for ClientConnection {
 }
 
 impl ClientConnection {
-    pub async fn connect(host: &str, port: u16, client_encrypt: bool) -> io::Result<Self> {
+    pub async fn connect(host: &str, port: u16, client_encrypt: bool, passphrase: Option<String>) -> io::Result<Self> {
         let addr = tokio::net::lookup_host(format!("{}:{}", host, port))
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
@@ -183,7 +183,7 @@ impl ClientConnection {
             }
         };
 
-        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms) = Self::handshake(tls, addr).await?;
+        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms) = Self::handshake(tls, addr, passphrase).await?;
         if client_encrypt != server_encrypt {
             return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
                 "This server doesn't use encryption, disable it in Security to connect"
@@ -282,6 +282,7 @@ impl ClientConnection {
     async fn handshake(
         tls: TlsStream<TcpStream>,
         server_addr: SocketAddr,
+        passphrase: Option<String>,
     ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16)> {
         let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
@@ -293,6 +294,44 @@ impl ClientConnection {
 
         let msg: ControlMsg = postcard::from_bytes(&frame)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let mut msg = msg;
+
+        // Handle auth challenge if present
+        if let ControlMsg::AuthChallenge { nonce, phc } = msg {
+            let passphrase = passphrase.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::PermissionDenied, "authentication required but no passphrase provided")
+            })?;
+            let hmac = crate::net::auth::client_compute_response(&passphrase, &phc, &nonce)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "failed to compute auth response"))?;
+            let response = ControlMsg::AuthResponse { hmac };
+            let bytes = postcard::to_allocvec(&response)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            framed.send(bytes.into()).await
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+            let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "auth result timeout"))?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "server closed connection during auth"))?
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            msg = postcard::from_bytes(&frame)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+            if let ControlMsg::AuthResult { ok: false } = msg {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "authentication failed"));
+            }
+            if let ControlMsg::AuthResult { ok: true } = msg {
+                // Read SessionInit next
+                let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
+                    .await
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout after auth"))?
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "server closed connection after auth"))?
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                msg = postcard::from_bytes(&frame)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            }
+        }
 
         let (conn_id, server_encrypt, key_timeout_ms) = match msg {
             ControlMsg::SessionInit { conn_id, encrypt, key_timeout_ms, .. } => (conn_id, encrypt, key_timeout_ms),

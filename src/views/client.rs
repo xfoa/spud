@@ -186,8 +186,9 @@ impl State {
                 self.last_error = None;
                 // TODO: Phase 3 - wire passphrase into TLS auth
                 // TODO: Phase 5 - run this via Task::perform instead of block_on
+                let passphrase = if self.require_auth { Some(self.passphrase.clone()) } else { None };
                 match tokio::runtime::Handle::current().block_on(
-                    crate::net::Sender::connect(&self.host, port, self.encrypt_udp)
+                    crate::net::Sender::connect(&self.host, port, self.encrypt_udp, passphrase)
                 ) {
                     Ok(s) => {
                         self.keyrepeat_interval_ms = (u64::from(s.key_timeout_ms) / 2).max(50);
@@ -967,7 +968,7 @@ impl State {
                 column![
                     text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
-                    ui::helper_text("Encrypt input events with AES-256-GCM over UDP."),
+                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but may be faster."),
                 ]
                 .width(Length::Fill),
                 checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
