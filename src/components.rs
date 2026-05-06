@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use iced::widget::text::Wrapping;
 use iced::widget::tooltip;
-use iced::widget::{button, column, container, image, mouse_area, row, text, Space};
+use iced::widget::{button, column, container, image, mouse_area, row, stack, text, Space};
 use iced::{font, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
 use crate::theme as mt;
@@ -287,6 +287,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     icon: char,
     name: &'a str,
     address: &'a str,
+    auth: bool,
     selected: bool,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
@@ -297,8 +298,42 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     let (address_display, address_truncated) = truncate(address, 22);
     let any_truncated = name_truncated || address_truncated;
 
+    let base_icon = text(icon).font(crate::icons::FA_SOLID).size(38).color(icon_color);
+    let icon_container = container(base_icon)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .width(Length::Fixed(44.0))
+        .height(Length::Fixed(44.0));
+    let icon_widget: Element<'a, Message> = if auth {
+        stack![
+            icon_container,
+            container(
+                container(text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(9).color(mt::SURFACE))
+                    .padding(2)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(mt::WARNING)),
+                        border: Border {
+                            color: mt::WARNING,
+                            width: 1.0,
+                            radius: 10.0.into(),
+                        },
+                        ..Default::default()
+                    })
+            )
+            .align_x(iced::Alignment::End)
+            .align_y(iced::Alignment::End)
+            .width(Length::Fixed(44.0))
+            .height(Length::Fixed(44.0)),
+        ]
+        .width(Length::Fixed(44.0))
+        .height(Length::Fixed(44.0))
+        .into()
+    } else {
+        icon_container.into()
+    };
+
     let content = column![
-        text(icon).font(crate::icons::FA_SOLID).size(38).color(icon_color),
+        icon_widget,
         v_space(10.0),
         text(name_display)
             .size(14)
@@ -358,33 +393,44 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if let Some(msg) = on_press {
         btn = btn.on_press(msg);
     }
-    if !any_truncated {
+    if !any_truncated && !auth {
         return btn.into();
     }
-    let tip = container(
-        column![
-            text(name.to_string()).size(13).color(mt::ON_SURFACE),
-            text(address.to_string())
-                .size(11)
-                .color(mt::ON_SURFACE_VARIANT),
-        ]
-        .spacing(2),
-    )
-    .padding(Padding::from([6, 10]))
-    .style(|_| container::Style {
-        background: Some(Background::Color(mt::SURFACE)),
-        border: Border {
-            color: mt::OUTLINE_VARIANT,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        shadow: Shadow {
-            color: mt::with_alpha(Color::BLACK, 0.18),
-            offset: Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
-        },
-        ..Default::default()
-    });
+
+    let mut tip_items: Vec<Element<'a, Message>> = Vec::new();
+    if name_truncated {
+        tip_items.push(text(name.to_string()).size(13).color(mt::ON_SURFACE).into());
+    }
+    if address_truncated {
+        tip_items.push(text(address.to_string()).size(11).color(mt::ON_SURFACE_VARIANT).into());
+    }
+    if auth {
+        tip_items.push(
+            row![
+                text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::WARNING),
+                text("Passphrase required").size(11).color(mt::WARNING),
+            ]
+            .spacing(4)
+            .into(),
+        );
+    }
+
+    let tip = container(column(tip_items).spacing(2))
+        .padding(Padding::from([6, 10]))
+        .style(|_| container::Style {
+            background: Some(Background::Color(mt::SURFACE)),
+            border: Border {
+                color: mt::OUTLINE_VARIANT,
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            shadow: Shadow {
+                color: mt::with_alpha(Color::BLACK, 0.18),
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 8.0,
+            },
+            ..Default::default()
+        });
     tooltip(btn, tip, tooltip::Position::Bottom)
         .gap(6.0)
         .into()

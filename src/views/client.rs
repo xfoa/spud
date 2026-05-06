@@ -673,6 +673,7 @@ impl State {
                         s.icon,
                         s.name.as_str(),
                         s.address.as_str(),
+                        s.auth,
                         selected,
                         on_press,
                     )

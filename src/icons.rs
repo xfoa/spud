@@ -16,6 +16,7 @@ pub const CIRCLE_INFO: char = '\u{f05a}';
 pub const SIGNAL: char = '\u{f012}';
 pub const NETWORK_WIRED: char = '\u{f6ff}';
 pub const SHIELD_HALVED: char = '\u{f3ed}';
+pub const KEY: char = '\u{f084}';
 pub const LOCK: char = '\u{f023}';
 pub const TRIANGLE_EXCLAMATION: char = '\u{f071}';
 pub const DESKTOP: char = '\u{f108}';
