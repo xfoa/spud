@@ -163,8 +163,24 @@ impl Spud {
                         return Task::none();
                     }
                 }
+                let is_connect = matches!(msg, client::Message::Connect);
                 let was_lost = matches!(msg, client::Message::ConnectionLost);
                 self.client.update(msg);
+                if is_connect {
+                    let host = self.client.host().to_string();
+                    let port = self.client.port().parse().unwrap_or(7878);
+                    let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
+                    let client_encrypt = self.client.encrypt_udp();
+                    return Task::perform(
+                        async move {
+                            crate::net::Sender::connect(&host, port, client_encrypt, passphrase).await
+                        },
+                        |result| match result {
+                            Ok(sender) => Message::Client(client::Message::ConnectSuccess(sender)),
+                            Err(e) => Message::Client(client::Message::ConnectFailed(format!("{e}"))),
+                        },
+                    );
+                }
                 if was_lost && self.client.is_reconnecting() {
                     let host = self.client.host().to_string();
                     let port = self.client.port().parse().unwrap_or(7878);

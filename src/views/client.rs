@@ -55,6 +55,8 @@ pub enum Message {
     HostChanged(String),
     PortChanged(String),
     Connect,
+    ConnectSuccess(crate::net::Sender),
+    ConnectFailed(String),
     Disconnect,
     SensitivityChanged(f32),
     NaturalScrollToggled(bool),
@@ -86,6 +88,7 @@ pub struct State {
     host: String,
     port: String,
     connected: bool,
+    connecting: bool,
     sensitivity: f32,
     natural_scroll: bool,
     capture_mode: CaptureMode,
@@ -126,6 +129,7 @@ impl State {
             host: cfg.host.clone(),
             port: cfg.port.clone(),
             connected: false,
+            connecting: false,
             sensitivity: cfg.sensitivity.parse().unwrap_or(1.0),
             natural_scroll: cfg.natural_scroll,
             capture_mode: cfg.capture_mode,
@@ -192,26 +196,22 @@ impl State {
                 }
             }
             Message::Connect => {
-                let port = self.port.parse::<u16>().unwrap_or(7878);
                 self.last_error = None;
-                // TODO: Phase 3 - wire passphrase into TLS auth
-                // TODO: Phase 5 - run this via Task::perform instead of block_on
-                let passphrase = self.connection_passphrase().map(|s| s.to_string());
-                match tokio::runtime::Handle::current().block_on(
-                    crate::net::Sender::connect(&self.host, port, self.encrypt_udp, passphrase)
-                ) {
-                    Ok(s) => {
-                        self.keyrepeat_interval_ms = (u64::from(s.key_timeout_ms) / 2).max(50);
-                        self.sender = Some(s);
-                        self.connected = true;
-                    }
-                    Err(e) => {
-                        self.last_error = Some(format!("{e}"));
-                    }
-                }
+                self.connecting = true;
+            }
+            Message::ConnectSuccess(sender) => {
+                self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
+                self.sender = Some(sender);
+                self.connected = true;
+                self.connecting = false;
+            }
+            Message::ConnectFailed(e) => {
+                self.last_error = Some(e);
+                self.connecting = false;
             }
             Message::Disconnect => {
                 self.connected = false;
+                self.connecting = false;
                 self.sender = None;
                 self.last_cursor = None;
                 self.last_error = None;
@@ -223,6 +223,7 @@ impl State {
             Message::ConnectionLost => {
                 if self.connected {
                     self.connected = false;
+                    self.connecting = false;
                     self.sender = None;
                     self.last_cursor = None;
                     self.pressed_keys.clear();
@@ -493,6 +494,8 @@ impl State {
     fn connection_page(&self, content_width: f32, server_running: bool) -> Element<'_, Message> {
         let status_label = if self.reconnecting {
             "Reconnecting..."
+        } else if self.connecting {
+            "Connecting..."
         } else if self.connected && !self.require_auth {
             "Connected (insecure)"
         } else if self.connected {
@@ -502,7 +505,7 @@ impl State {
         };
         let status_color = if self.connected {
             mt::SUCCESS
-        } else if self.reconnecting {
+        } else if self.reconnecting || self.connecting {
             mt::WARNING
         } else {
             mt::ON_SURFACE_VARIANT
@@ -522,7 +525,7 @@ impl State {
             .spacing(8)
             .align_y(iced::Alignment::Center)
             .into()
-        } else if self.reconnecting {
+        } else if self.reconnecting || self.connecting {
             row![
                 text("Status:").size(14).color(mt::ON_SURFACE_VARIANT),
                 text(icons::ROTATE).font(icons::FA_SOLID).size(13).color(mt::WARNING),
@@ -543,7 +546,7 @@ impl State {
         let mut host_input = text_input("e.g. 192.168.1.42 or hostname.local", &self.host)
             .padding(12)
             .size(14);
-        let is_active = self.connected || self.reconnecting;
+        let is_active = self.connected || self.reconnecting || self.connecting;
         if !is_active {
             host_input = host_input.on_input(Message::HostChanged);
         }
@@ -669,7 +672,8 @@ impl State {
                 .map(|(j, s)| {
                     let idx = base + j;
                     let selected = self.host == s.host && self.port == s.port;
-                    let on_press = (!self.connected).then_some(Message::SelectDiscovered(idx));
+                    let on_press = (!self.connected && !self.connecting && !self.reconnecting)
+                        .then_some(Message::SelectDiscovered(idx));
                     ui::server_tile(
                         s.icon,
                         s.name.as_str(),
