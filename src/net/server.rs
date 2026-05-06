@@ -100,31 +100,33 @@ async fn run_server(
                             session.last_activity = std::time::Instant::now();
                             session.src_addr = src;
 
-                            let plaintext = if session.encrypt {
-                                if let Some(ref keys) = session.keys {
-                                    if n >= 16 + 16 {
-                                        let seq = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+                            let plaintext: Option<Vec<u8>> = if session.encrypt {
+                                if n >= 16 + 16 {
+                                    let seq = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+                                    if !session.replay_window.is_valid(seq) {
+                                        eprintln!("[spud] UDP replay/duplicate seq {seq} for conn {conn_id}, dropping");
+                                        None
+                                    } else if let Some(ref keys) = session.keys {
                                         let nonce_ct = &buf[16..n];
                                         let cipher = Aes256Gcm::new_from_slice(&keys.server_read).unwrap();
                                         crate::crypto::decrypt_event(&cipher, seq, nonce_ct)
-                                            .unwrap_or_else(|| {
-                                                eprintln!("[spud] UDP decrypt failed for conn {conn_id}");
-                                                payload.to_vec()
-                                            })
                                     } else {
-                                        eprintln!("[spud] UDP packet too short for encryption");
-                                        payload.to_vec()
+                                        eprintln!("[spud] encrypted session missing keys, dropping");
+                                        None
                                     }
                                 } else {
-                                    payload.to_vec()
+                                    eprintln!("[spud] UDP packet too short for encryption, dropping");
+                                    None
                                 }
                             } else {
-                                payload.to_vec()
+                                Some(payload.to_vec())
                             };
 
-                            if let Some(event) = crate::net::Event::decode(&plaintext) {
-                                // TODO: feed to input replay instead of just printing
-                                println!("[server] {src}: {event:?}");
+                            if let Some(pt) = plaintext {
+                                if let Some(event) = crate::net::Event::decode(&pt) {
+                                    // TODO: feed to input replay instead of just printing
+                                    println!("[server] {src}: {event:?}");
+                                }
                             }
                         }
                     }

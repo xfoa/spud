@@ -183,8 +183,14 @@ impl ClientConnection {
         };
 
         let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms) = Self::handshake(tls, addr).await?;
-        let encrypt = client_encrypt && server_encrypt;
+        if client_encrypt != server_encrypt {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "encryption setting mismatch"));
+        }
+        let encrypt = client_encrypt;
         let cipher = encrypt.then(|| client_cipher).flatten();
+        if encrypt && cipher.is_none() {
+            return Err(io::Error::new(io::ErrorKind::Other, "failed to derive encryption keys"));
+        }
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let (udp_tx, mut udp_rx) = mpsc::unbounded_channel::<Event>();
@@ -199,7 +205,7 @@ impl ClientConnection {
         tokio::spawn(async move {
             while let Some(event) = udp_rx.recv().await {
                 let buf = event.encode();
-                let packet = if encrypt_clone {
+                let packet: Option<Vec<u8>> = if encrypt_clone {
                     if let Some(ref c) = cipher_clone {
                         let s = seq.fetch_add(1, Ordering::SeqCst);
                         match crate::crypto::encrypt_event(c, s, &buf) {
@@ -208,28 +214,26 @@ impl ClientConnection {
                                 p.extend_from_slice(&conn_id_clone.to_le_bytes());
                                 p.extend_from_slice(&s.to_le_bytes());
                                 p.append(&mut ct);
-                                p
+                                Some(p)
                             }
-                            Err(_) => {
-                                let mut p = Vec::with_capacity(8 + buf.len());
-                                p.extend_from_slice(&conn_id_clone.to_le_bytes());
-                                p.extend_from_slice(&buf);
-                                p
+                            Err(e) => {
+                                eprintln!("[spud] UDP encrypt failed for conn {conn_id_clone}: {e}");
+                                None
                             }
                         }
                     } else {
-                        let mut p = Vec::with_capacity(8 + buf.len());
-                        p.extend_from_slice(&conn_id_clone.to_le_bytes());
-                        p.extend_from_slice(&buf);
-                        p
+                        eprintln!("[spud] UDP encryption requested but no cipher available");
+                        None
                     }
                 } else {
                     let mut p = Vec::with_capacity(8 + buf.len());
                     p.extend_from_slice(&conn_id_clone.to_le_bytes());
                     p.extend_from_slice(&buf);
-                    p
+                    Some(p)
                 };
-                let _ = udp_socket_clone.send(&packet).await;
+                if let Some(p) = packet {
+                    let _ = udp_socket_clone.send(&p).await;
+                }
             }
         });
 
