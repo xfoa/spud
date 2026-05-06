@@ -92,6 +92,7 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
+    pending_passphrase: String,
     passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
@@ -131,6 +132,7 @@ impl State {
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
             passphrase: String::new(),
+            pending_passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
             hotkey_dialog_open: false,
@@ -174,7 +176,15 @@ impl State {
 impl State {
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::SelectPage(p) => self.page = p,
+            Message::SelectPage(p) => {
+                if self.page == Page::Security && p != Page::Security {
+                    if !self.pending_passphrase.is_empty() {
+                        self.passphrase = self.pending_passphrase.clone();
+                    }
+                    self.pending_passphrase.clear();
+                }
+                self.page = p;
+            }
             Message::HostChanged(s) => self.host = s,
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
@@ -192,7 +202,6 @@ impl State {
                 ) {
                     Ok(s) => {
                         self.keyrepeat_interval_ms = (u64::from(s.key_timeout_ms) / 2).max(50);
-                        self.passphrase.clear();
                         self.sender = Some(s);
                         self.connected = true;
                     }
@@ -243,7 +252,7 @@ impl State {
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
             Message::CaptureModeChanged(m) => self.capture_mode = m,
             Message::RequireAuthToggled(v) => self.require_auth = v,
-            Message::PassphraseChanged(s) => self.passphrase = s,
+            Message::PassphraseChanged(s) => self.pending_passphrase = s,
             Message::SelectDiscovered(i) => {
                 if let Some(server) = self.discovered.get(i) {
                     self.host = server.host.clone();
@@ -901,7 +910,7 @@ impl State {
             ui::v_space(4.0).into(),
             ui::helper_text("Must match the passphrase set on the server.").into(),
             ui::v_space(16.0).into(),
-            text_input("Enter passphrase", &self.passphrase)
+            text_input("Enter passphrase", &self.pending_passphrase)
                 .on_input(Message::PassphraseChanged)
                 .secure(true)
                 .padding(12)
@@ -909,25 +918,25 @@ impl State {
                 .into(),
         ];
 
-        if !self.passphrase.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is set.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        } else if self.passphrase_hash.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            if self.require_auth {
+        if self.pending_passphrase.is_empty() {
+            if !self.passphrase.is_empty() {
+                passphrase_items.push(ui::v_space(8.0).into());
+                passphrase_items.push(
+                    row![
+                        text(icons::LOCK)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::SUCCESS),
+                        text("Passphrase is set.")
+                            .size(12)
+                            .color(mt::SUCCESS),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            } else if self.require_auth {
+                passphrase_items.push(ui::v_space(8.0).into());
                 passphrase_items.push(
                     row![
                         text(icons::TRIANGLE_EXCLAMATION)
@@ -943,22 +952,6 @@ impl State {
                     .into(),
                 );
             }
-        } else {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is saved. Type a new one to change it.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
         }
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));

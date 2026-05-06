@@ -572,25 +572,25 @@ impl State {
                 .into(),
         ];
 
-        if !self.passphrase.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is set.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        } else if self.passphrase_hash.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            if self.require_auth {
+        if self.passphrase.is_empty() {
+            if !self.passphrase_hash.is_empty() {
+                passphrase_items.push(ui::v_space(8.0).into());
+                passphrase_items.push(
+                    row![
+                        text(icons::LOCK)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::SUCCESS),
+                        text("Passphrase is set.")
+                            .size(12)
+                            .color(mt::SUCCESS),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            } else if self.require_auth {
+                passphrase_items.push(ui::v_space(8.0).into());
                 passphrase_items.push(
                     row![
                         text(icons::TRIANGLE_EXCLAMATION)
@@ -606,22 +606,6 @@ impl State {
                     .into(),
                 );
             }
-        } else {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is saved. Type a new one to change it.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
         }
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));
