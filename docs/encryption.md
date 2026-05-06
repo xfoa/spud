@@ -132,21 +132,26 @@ permitted.
 
 ```mermaid
 packet-beta
-title UDP datagram (plaintext)
+title UDP datagram header (plaintext)
 0-63: "ConnId (u64 LE)"
-64-..: "Event (postcard-serialized)"
 ```
+
+Postcard-serialized `Event` follows, variable length. Bounded by the server's
+receive buffer (2048 bytes) and the UDP payload limit (~65 KB).
 
 ### Encrypted (encryption enabled)
 
 ```mermaid
 packet-beta
-title UDP datagram (encrypted)
+title UDP datagram header (encrypted)
 0-63: "ConnId (u64 LE)"
 64-127: "Seq (u64 LE)"
 128-239: "Nonce (12 bytes)"
-240-..: "Ciphertext + AES-GCM tag (16 bytes)"
 ```
+
+AES-256-GCM ciphertext follows, variable length. The cipher appends a 16-byte
+authentication tag. The total payload is bounded by the UDP payload limit
+minus the 30-byte header.
 
 * `ConnId`: session identifier received in `SessionInit`.
 * `Seq`: monotonically increasing 64-bit sequence number per packet,

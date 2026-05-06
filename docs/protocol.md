@@ -51,14 +51,12 @@ control message is a length-prefixed payload:
 
 ```mermaid
 packet-beta
-title TCP frame
+title TCP frame header
 0-15: "Length (u16 LE)"
-16-..: "Payload (variable, up to 65535 bytes)"
 ```
 
-`length` is the size of `payload` in bytes. Maximum payload is 65535 bytes.
-
-The payload is a `postcard`-serialized `ControlMsg`.
+`length` is the size of the payload in bytes. It may be 0 to 65535. The payload
+is a `postcard`-serialized `ControlMsg`.
 
 ### Control messages
 
@@ -128,10 +126,12 @@ beyond the UDP boundary itself.
 
 ```mermaid
 packet-beta
-title UDP datagram (plaintext)
+title UDP datagram header (plaintext)
 0-63: "ConnId (u64 LE)"
-64-..: "Event (postcard-serialized)"
 ```
+
+Postcard-serialized `Event` follows, variable length. It is bounded by the
+server's receive buffer (2048 bytes) and the UDP payload limit (~65 KB).
 
 The payload after `ConnId` is a `postcard` encoding of the `Event` enum:
 
