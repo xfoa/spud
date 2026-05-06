@@ -25,6 +25,23 @@ pub fn client_compute_response(passphrase: &str, salt: &str, challenge: &[u8; 32
     Some(mac.finalize().into_bytes().into())
 }
 
+/// Attempt to compute the auth response from a saved PHC string.
+/// Returns `Some(response)` if the PHC is valid and its salt matches the server's salt.
+/// Returns `None` if the PHC is malformed or the salt does not match.
+pub fn client_compute_response_from_phc(saved_phc: &str, server_salt: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
+    let parsed = argon2::password_hash::PasswordHash::new(saved_phc).ok()?;
+    let stored_salt = parsed.salt?;
+    if stored_salt.as_str() != server_salt {
+        return None;
+    }
+    let hash = parsed.hash?;
+    let hash_bytes = hash.as_bytes();
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(hash_bytes).ok()?;
+    mac.update(challenge);
+    Some(mac.finalize().into_bytes().into())
+}
+
 /// Server computes the expected response from its stored PHC hash.
 /// The PHC string's hash output is used directly as the HMAC key,
 /// so the plaintext passphrase is not required.

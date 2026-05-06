@@ -102,7 +102,19 @@ impl Clone for ClientConnection {
 }
 
 impl ClientConnection {
-    pub async fn connect(host: &str, port: u16, client_encrypt: bool, passphrase: Option<String>) -> io::Result<Self> {
+    /// Connect to a server.
+    ///
+    /// `saved_phc` is an optional previously-saved PHC string. If its salt matches the server's
+    /// salt, the hash bytes are reused directly without requiring the plaintext passphrase.
+    /// On success, returns `(ClientConnection, Option<String>)` where the option is the PHC
+    /// string to save for future connections.
+    pub async fn connect(
+        host: &str,
+        port: u16,
+        client_encrypt: bool,
+        passphrase: Option<String>,
+        saved_phc: Option<String>,
+    ) -> io::Result<(Self, Option<String>)> {
         let addr = tokio::net::lookup_host(format!("{}:{}", host, port))
             .await
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
@@ -185,7 +197,8 @@ impl ClientConnection {
             }
         };
 
-        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, last_salt) = Self::handshake(tls, addr, passphrase).await?;
+        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, phc_to_save) =
+            Self::handshake(tls, addr, passphrase, saved_phc).await?;
         if client_encrypt != server_encrypt {
             return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
                 "This server doesn't use encryption, disable it in Security to connect"
@@ -271,21 +284,22 @@ impl ClientConnection {
             push_event(NetEvent::Disconnected);
         });
 
-        Ok(Self {
+        Ok((Self {
             udp_tx,
             _shutdown: shutdown,
             conn_id,
             encrypt,
             key_timeout_ms,
-            last_salt,
+            last_salt: phc_to_save.clone(),
             cipher,
-        })
+        }, phc_to_save))
     }
 
     async fn handshake(
         tls: TlsStream<TcpStream>,
         server_addr: SocketAddr,
         passphrase: Option<String>,
+        saved_phc: Option<String>,
     ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>)> {
         let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
@@ -299,16 +313,32 @@ impl ClientConnection {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         let mut msg = msg;
-        let mut last_salt = None;
+        let mut phc_to_save = None;
 
         // Handle auth challenge if present
         if let ControlMsg::AuthChallenge { nonce, salt } = msg {
-            last_salt = Some(salt.clone());
-            let passphrase = passphrase.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::PermissionDenied, "Authentication required but no passphrase provided")
-            })?;
-            let hmac = crate::net::auth::client_compute_response(&passphrase, &salt, &nonce)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Authentication error: failed to compute auth response"))?;
+            let hmac = match saved_phc {
+                Some(ref phc) => match crate::net::auth::client_compute_response_from_phc(phc, &salt, &nonce) {
+                    Some(hmac) => {
+                        phc_to_save = Some(phc.clone());
+                        Some(hmac)
+                    }
+                    None => None,
+                }
+                None => None,
+            };
+
+            let hmac = match hmac {
+                Some(hmac) => hmac,
+                None => {
+                    let passphrase = passphrase.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::PermissionDenied, "Authentication required but no passphrase provided")
+                    })?;
+                    phc_to_save = crate::config::hash_passphrase_with_salt(&passphrase, &salt);
+                    crate::net::auth::client_compute_response(&passphrase, &salt, &nonce)
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Authentication error: failed to compute auth response"))?
+                }
+            };
             let response = ControlMsg::AuthResponse { hmac };
             let bytes = postcard::to_allocvec(&response)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -346,7 +376,7 @@ impl ClientConnection {
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
         udp.connect(server_addr).await?;
 
-        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, last_salt))
+        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, phc_to_save))
     }
 
     pub fn send(&self, event: &Event) {

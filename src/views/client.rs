@@ -55,7 +55,7 @@ pub enum Message {
     HostChanged(String),
     PortChanged(String),
     Connect,
-    ConnectSuccess(crate::net::Sender),
+    ConnectSuccess(crate::net::Sender, Option<String>),
     ConnectFailed(String),
     Disconnect,
     SensitivityChanged(f32),
@@ -199,10 +199,10 @@ impl State {
                 self.last_error = None;
                 self.connecting = true;
             }
-            Message::ConnectSuccess(sender) => {
+            Message::ConnectSuccess(sender, phc) => {
                 self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
-                if let Some(salt) = sender.last_salt.clone() {
-                    self.passphrase_hash = salt;
+                if let Some(phc) = phc {
+                    self.passphrase_hash = phc;
                 }
                 self.sender = Some(sender);
                 self.connected = true;
