@@ -33,12 +33,15 @@ pub struct SessionKeys {
 }
 
 /// Per-session state stored in the server's session table.
+const MAX_FAILED_DECRYPTS: u32 = 10;
+
 pub struct SessionState {
     pub keys: Option<SessionKeys>,
     pub replay_window: ReplayWindow,
     pub last_activity: Instant,
     pub src_addr: SocketAddr,
     pub encrypt: bool,
+    pub failed_decrypts: u32,
 }
 
 impl SessionState {
@@ -49,7 +52,17 @@ impl SessionState {
             last_activity: Instant::now(),
             src_addr,
             encrypt,
+            failed_decrypts: 0,
         }
+    }
+
+    pub fn record_decrypt_success(&mut self) {
+        self.failed_decrypts = 0;
+    }
+
+    pub fn record_decrypt_failure(&mut self) -> bool {
+        self.failed_decrypts += 1;
+        self.failed_decrypts >= MAX_FAILED_DECRYPTS
     }
 }
 

@@ -96,6 +96,7 @@ async fn run_server(
                         let conn_id = u64::from_le_bytes(buf[..8].try_into().unwrap());
                         let payload = &buf[8..n];
 
+                        let mut should_remove = false;
                         if let Some(mut session) = sessions.get_mut(&conn_id) {
                             session.last_activity = std::time::Instant::now();
                             session.src_addr = src;
@@ -123,11 +124,20 @@ async fn run_server(
                             };
 
                             if let Some(pt) = plaintext {
+                                session.record_decrypt_success();
                                 if let Some(event) = crate::net::Event::decode(&pt) {
                                     // TODO: feed to input replay instead of just printing
                                     println!("[server] {src}: {event:?}");
                                 }
+                            } else if session.encrypt {
+                                should_remove = session.record_decrypt_failure();
+                                if should_remove {
+                                    eprintln!("[spud] UDP too many failed decrypts for conn {conn_id}, removing session");
+                                }
                             }
+                        }
+                        if should_remove {
+                            sessions.remove(&conn_id);
                         }
                     }
                     Err(e) => {
