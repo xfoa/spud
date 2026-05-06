@@ -28,6 +28,7 @@ tokio-util = { version = "0.7", features = ["codec"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
 rcgen = { version = "0.13", features = ["pem"] }
+x509-parser = "0.16"
 hex = "0.4"
 futures = "0.3"
 

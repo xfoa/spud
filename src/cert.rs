@@ -22,10 +22,20 @@ pub fn generate_self_signed_cert() -> Result<(CertificateDer<'static>, PrivateKe
     Ok((cert_der.into(), key_der, cert_pem, key_pem))
 }
 
-/// Compute SHA-256 fingerprint of a certificate's DER encoding.
+/// Compute SHA-256 fingerprint of a certificate's Subject Public Key Info (SPKI).
+/// This is stable across certificate regenerations that use the same key pair.
 pub fn cert_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
+    use x509_parser::prelude::*;
     let mut hasher = Sha256::new();
-    hasher.update(cert.as_ref());
+    match X509Certificate::from_der(cert.as_ref()) {
+        Ok((_, cert)) => {
+            hasher.update(cert.tbs_certificate.subject_pki.raw);
+        }
+        Err(_) => {
+            // Fallback: hash full DER if parsing fails
+            hasher.update(cert.as_ref());
+        }
+    }
     hasher.finalize().into()
 }
 
