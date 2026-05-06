@@ -194,7 +194,8 @@ async fn handle_client(
     // Auth challenge-response
     if require_auth && !passphrase_hash.is_empty() {
         let challenge = crate::net::auth::generate_challenge();
-        let challenge_msg = ControlMsg::AuthChallenge { nonce: challenge, phc: passphrase_hash.clone() };
+        let salt = crate::config::extract_salt(&passphrase_hash).unwrap_or_default();
+        let challenge_msg = ControlMsg::AuthChallenge { nonce: challenge, salt };
         let bytes = match postcard::to_allocvec(&challenge_msg) {
             Ok(b) => b,
             Err(_) => return,

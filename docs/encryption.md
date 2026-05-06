@@ -30,7 +30,7 @@ sequenceDiagram
     participant S as Server
     C->>S: TCP + TLS 1.3 handshake
     opt Auth required
-        S->>C: AuthChallenge { nonce, phc }
+        S->>C: AuthChallenge { nonce, salt }
         C->>S: AuthResponse { hmac }
         S->>C: AuthResult { ok: true }
     end

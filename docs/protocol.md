@@ -63,7 +63,7 @@ is a `postcard`-serialized `ControlMsg`.
 
 ```rust
 pub enum ControlMsg {
-    AuthChallenge { nonce: [u8; 32], phc: String },
+    AuthChallenge { nonce: [u8; 32], salt: String },
     AuthResponse  { hmac: [u8; 32] },
     AuthResult    { ok: bool },
     SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, key_timeout_ms: u16 },
@@ -98,8 +98,8 @@ Either side closing the TLS connection terminates the session.
 Sent when the server has `require_auth` enabled and a passphrase is configured.
 
 * `nonce`: 32 random bytes.
-* `phc`: The server's stored passphrase hash in PHC string format (Argon2id).
-  The client extracts the salt from this string to re-derive the hash.
+* `salt`: The base64-encoded Argon2id salt extracted from the server's stored
+  PHC hash. The client re-hashes the user's plaintext passphrase with this salt.
 
 The client must respond with an `AuthResponse` within 10 seconds.
 
@@ -108,8 +108,7 @@ The client must respond with an `AuthResponse` within 10 seconds.
 Sent by the client in reply to `AuthChallenge`.
 
 * `hmac`: HMAC-SHA256 of the 32-byte nonce. The key is the Argon2id hash output
-  derived from the user's plaintext passphrase and the salt extracted from the
-  PHC string in `AuthChallenge`.
+  derived from the user's plaintext passphrase and the salt from `AuthChallenge`.
 
 #### `AuthResult` (server -> client)
 

@@ -201,6 +201,9 @@ impl State {
             }
             Message::ConnectSuccess(sender) => {
                 self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
+                if let Some(salt) = sender.last_salt.clone() {
+                    self.passphrase_hash = salt;
+                }
                 self.sender = Some(sender);
                 self.connected = true;
                 self.connecting = false;
@@ -924,7 +927,8 @@ impl State {
         ];
 
         if self.pending_passphrase.is_empty() {
-            if !self.passphrase.is_empty() {
+            let has_passphrase = !self.passphrase.is_empty() || !self.passphrase_hash.is_empty();
+            if has_passphrase {
                 passphrase_items.push(ui::v_space(8.0).into());
                 passphrase_items.push(
                     row![

@@ -73,6 +73,7 @@ pub struct ClientConnection {
     pub conn_id: u64,
     pub encrypt: bool,
     pub key_timeout_ms: u16,
+    pub last_salt: Option<String>,
     cipher: Option<Aes256Gcm>,
 }
 
@@ -94,6 +95,7 @@ impl Clone for ClientConnection {
             conn_id: self.conn_id,
             encrypt: self.encrypt,
             key_timeout_ms: self.key_timeout_ms,
+            last_salt: self.last_salt.clone(),
             cipher: self.cipher.clone(),
         }
     }
@@ -183,7 +185,7 @@ impl ClientConnection {
             }
         };
 
-        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms) = Self::handshake(tls, addr, passphrase).await?;
+        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, last_salt) = Self::handshake(tls, addr, passphrase).await?;
         if client_encrypt != server_encrypt {
             return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
                 "This server doesn't use encryption, disable it in Security to connect"
@@ -275,6 +277,7 @@ impl ClientConnection {
             conn_id,
             encrypt,
             key_timeout_ms,
+            last_salt,
             cipher,
         })
     }
@@ -283,7 +286,7 @@ impl ClientConnection {
         tls: TlsStream<TcpStream>,
         server_addr: SocketAddr,
         passphrase: Option<String>,
-    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16)> {
+    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>)> {
         let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
         let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
@@ -296,13 +299,15 @@ impl ClientConnection {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         let mut msg = msg;
+        let mut last_salt = None;
 
         // Handle auth challenge if present
-        if let ControlMsg::AuthChallenge { nonce, phc } = msg {
+        if let ControlMsg::AuthChallenge { nonce, salt } = msg {
+            last_salt = Some(salt.clone());
             let passphrase = passphrase.ok_or_else(|| {
                 io::Error::new(io::ErrorKind::PermissionDenied, "Authentication required but no passphrase provided")
             })?;
-            let hmac = crate::net::auth::client_compute_response(&passphrase, &phc, &nonce)
+            let hmac = crate::net::auth::client_compute_response(&passphrase, &salt, &nonce)
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Authentication error: failed to compute auth response"))?;
             let response = ControlMsg::AuthResponse { hmac };
             let bytes = postcard::to_allocvec(&response)
@@ -341,7 +346,7 @@ impl ClientConnection {
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
         udp.connect(server_addr).await?;
 
-        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms))
+        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, last_salt))
     }
 
     pub fn send(&self, event: &Event) {

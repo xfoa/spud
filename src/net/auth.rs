@@ -14,11 +14,8 @@ pub fn generate_challenge() -> [u8; 32] {
 }
 
 /// Client computes HMAC-SHA256(Argon2(passphrase, salt), challenge).
-/// The salt is extracted from the server's PHC string.
-pub fn client_compute_response(passphrase: &str, phc: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
-    let parsed = argon2::password_hash::PasswordHash::new(phc).ok()?;
-    let salt = parsed.salt.map(|s| s.as_str().to_string())?;
-    let hash = hash_passphrase_with_salt(passphrase, &salt)?;
+pub fn client_compute_response(passphrase: &str, salt: &str, challenge: &[u8; 32]) -> Option<[u8; 32]> {
+    let hash = hash_passphrase_with_salt(passphrase, salt)?;
     let parsed = argon2::password_hash::PasswordHash::new(&hash).ok()?;
     let hash = parsed.hash?;
     let hash_bytes = hash.as_bytes();
@@ -61,8 +58,9 @@ mod tests {
         let stored_phc = hash_passphrase(passphrase);
         assert!(!stored_phc.is_empty(), "PHC hash should not be empty");
 
+        let salt = crate::config::extract_salt(&stored_phc).expect("salt should be extractable");
         let challenge = generate_challenge();
-        let client_response = client_compute_response(passphrase, &stored_phc, &challenge)
+        let client_response = client_compute_response(passphrase, &salt, &challenge)
             .expect("client should compute response");
         let expected = server_compute_expected(&stored_phc, &challenge)
             .expect("server should compute expected");
@@ -74,8 +72,9 @@ mod tests {
     #[test]
     fn auth_wrong_passphrase_fails() {
         let stored_phc = hash_passphrase("right password");
+        let salt = crate::config::extract_salt(&stored_phc).expect("salt should be extractable");
         let challenge = generate_challenge();
-        let client_response = client_compute_response("wrong password", &stored_phc, &challenge)
+        let client_response = client_compute_response("wrong password", &salt, &challenge)
             .expect("client should compute response even with wrong password");
 
         assert!(!server_verify_response(&stored_phc, &challenge, &client_response));
