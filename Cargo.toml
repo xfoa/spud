@@ -25,7 +25,7 @@ postcard = { version = "1.1", features = ["use-std"] }
 tokio = { version = "1.43", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
 tokio-rustls = "0.26"
 tokio-util = { version = "0.7", features = ["codec"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2"
 rcgen = { version = "0.13", features = ["pem"] }
 hex = "0.4"
