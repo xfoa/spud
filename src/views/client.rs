@@ -908,7 +908,14 @@ impl State {
                     ui::helper_text("Send a passphrase when connecting to the server."),
                 ]
                 .width(Length::Fill),
-                checkbox(self.require_auth).on_toggle(Message::RequireAuthToggled),
+                {
+                    let cb = checkbox(self.require_auth);
+                    if !self.connected {
+                        cb.on_toggle(Message::RequireAuthToggled)
+                    } else {
+                        cb
+                    }
+                }
             ]
             .align_y(iced::Alignment::Center),
         );
@@ -918,12 +925,16 @@ impl State {
             ui::v_space(4.0).into(),
             ui::helper_text("Must match the passphrase set on the server.").into(),
             ui::v_space(16.0).into(),
-            text_input("Enter passphrase", &self.pending_passphrase)
-                .on_input(Message::PassphraseChanged)
-                .secure(true)
-                .padding(12)
-                .size(14)
-                .into(),
+            {
+                let mut input = text_input("Enter passphrase", &self.pending_passphrase)
+                    .secure(true)
+                    .padding(12)
+                    .size(14);
+                if !self.connected {
+                    input = input.on_input(Message::PassphraseChanged);
+                }
+                input.into()
+            }
         ];
 
         if self.pending_passphrase.is_empty() {
@@ -973,7 +984,14 @@ impl State {
                     ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but may be faster."),
                 ]
                 .width(Length::Fill),
-                checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
+                {
+                    let cb = checkbox(self.encrypt_udp);
+                    if !self.connected {
+                        cb.on_toggle(Message::EncryptUdpToggled)
+                    } else {
+                        cb
+                    }
+                }
             ]
             .align_y(iced::Alignment::Center),
         );
