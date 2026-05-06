@@ -3,236 +3,161 @@
 Spud uses two channels between client and server, both on the same configured
 port:
 
-* **TCP control plane** for the handshake (version + feature negotiation + auth)
-  and liveness signal.
+* **TCP + TLS 1.3 control plane** for session setup, liveness, and optional
+  authentication.
 * **UDP input plane** for input events streamed from the client to the server.
 
-A client must complete the TCP handshake before its UDP packets are accepted.
-The server tracks the source IP of every authorized control connection; UDP
-datagrams from any other source are dropped.
+A client must complete the TLS handshake and receive a `SessionInit` before its
+UDP packets are accepted. The server tracks sessions by `ConnId` (a 64-bit
+identifier); UDP datagrams carrying an unknown `ConnId` are silently dropped.
 
 All multi-byte integers are little-endian.
 
 ## Constants
 
-| Name               | Value            | Purpose                                  |
-|--------------------|------------------|------------------------------------------|
-| `PROTOCOL_VERSION` | `1`              | Highest version this build understands.  |
-| `FEATURES`         | `0`              | Feature bitmap. No features defined yet. |
-| `CTRL_HELLO`       | `0x01`           | Client handshake opening.                |
-| `CTRL_HELLO_ACK`   | `0x02`           | Server handshake reply.                  |
-| `CTRL_AUTH_FAILED` | `0x03`           | Server auth rejection.                   |
-| `CTRL_AUTH`        | `0x04`           | Client auth response.                    |
-| `CTRL_AUTH_ACK`    | `0x05`           | Server auth acceptance.                  |
-| `KEY_TIMEOUT`      | `1 s`            | Server releases held keys with no recent activity. |
-| Key repeat interval | `500 ms`         | Client refresh cadence for held keys.    |
-| Connect timeout    | `5 s`            | Client TCP connect + handshake budget.   |
+| Name                 | Value    | Purpose                                      |
+|----------------------|----------|----------------------------------------------|
+| `ALPN_PROTOCOL`      | `spud/1` | ALPN identifier for TLS negotiation.         |
+| `CONNECT_TIMEOUT`    | `5 s`    | TCP connect budget.                          |
+| `TLS_TIMEOUT`        | `10 s`   | TLS handshake budget.                        |
+| `HANDSHAKE_TIMEOUT`  | `5 s`    | Budget to receive `SessionInit` after TLS.   |
+| `KEEPALIVE_INTERVAL` | `30 s`   | Cadence for `Keepalive` over TLS.            |
+| `SESSION_TIMEOUT`    | `300 s`  | Max idle time before server closes session.  |
+
+## Certificates and trust
+
+The server generates a self-signed Ed25519 certificate on first start and
+persists it to `~/.config/spud/cert.pem` and `key.pem`. The certificate's
+SHA-256 fingerprint is its identity.
+
+The client uses **trust on first use** (TOFU):
+
+1. If the client has no stored fingerprint for `host:port`, it performs a probe
+   connection with a permissive verifier, extracts the server's certificate
+   fingerprint, stores it in `~/.config/spud/known_servers.toml`, and then
+   reconnects using the now-trusted fingerprint.
+2. On subsequent connections, the client verifies the server's certificate
+   against the stored fingerprint using a constant-time comparison.
+
+If the server's certificate changes, the client refuses to connect until the
+user clears the stored fingerprint.
 
 ## TCP control plane
 
 ### Framing
 
-Every control message is a length-prefixed payload:
+The TLS stream is framed with `tokio_util::codec::LengthDelimitedCodec`. Every
+control message is a length-prefixed payload:
 
 ```mermaid
 packet-beta
 title TCP frame
 0-15: "Length (u16 LE)"
-16-79: "Payload (variable, up to 65535 bytes)"
+16-..: "Payload (variable, up to 65535 bytes)"
 ```
 
 `length` is the size of `payload` in bytes. Maximum payload is 65535 bytes.
 
-The payload itself starts with a 1-byte tag identifying the message type.
+The payload is a `postcard`-serialized `ControlMsg`.
 
-### Messages
+### Control messages
 
-#### `0x01` Hello (client -> server)
-
-Sent immediately by the client after the TCP connection is established.
-
-```mermaid
-packet-beta
-title Hello payload
-0-7: "Tag = 0x01"
-8-23: "Version (u16 LE)"
-24-55: "Features (u32 LE)"
+```rust
+pub enum ControlMsg {
+    AuthChallenge { nonce: [u8; 32] },
+    AuthResponse  { hmac: [u8; 32] },
+    AuthResult    { ok: bool },
+    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, key_timeout_ms: u16 },
+    Keepalive,
+}
 ```
 
-* `Version`: highest protocol version the client supports.
-* `Features`: feature bitmap the client wishes to advertise.
+#### `SessionInit` (server -> client)
 
-#### `0x02` HelloAck (server -> client)
+Sent by the server immediately after the TLS handshake completes (and after any
+authentication, if implemented). This is the only message required to begin a
+session.
 
-Reply to a valid `Hello`.
+* `conn_id`: opaque 64-bit session identifier. The client must include this in
+  every UDP datagram.
+* `uuid`: 128-bit session UUID (reserved for future use).
+* `encrypt`: the server's UDP encryption preference. The connection is aborted
+  if this does not match the client's preference.
+* `key_timeout_ms`: server key-release timeout in milliseconds. The client
+  derives its key-repeat interval from this value (`key_timeout_ms / 2`).
 
-```mermaid
-packet-beta
-title HelloAck payload
-0-7: "Tag = 0x02"
-8-23: "Version (u16 LE)"
-24-55: "Features (u32 LE)"
-56-71: "Key timeout (u16 LE)"
-72-79: "Hash length (u8)"
-80-..: "Hash (UTF-8, variable, up to 255)"
-```
+#### `Keepalive` (bidirectional)
 
-* `Version`: negotiated protocol version, defined as
-  `min(client.version, server.version)`. A value of `0` means the server is
-  unwilling to proceed; the client must treat the connection as failed.
-* `Features`: negotiated feature bitmap, defined as
-  `client.features & server.features`.
-* `Key timeout`: server key-release timeout in milliseconds.
-* `Hash`: the server's stored Argon2 hash (PHC string). The salt is embedded
-  inside this string; the client extracts it to compute its own hash. The
-  client may also compare this hash against a previously stored copy to detect
-  whether the server has changed its passphrase since the last connection.
+Sent periodically (every 30 s) by both sides over the TLS stream to detect
+silent disconnects. The payload is empty except for the `ControlMsg` tag.
 
-An empty `Hash` means the server does not have authentication configured.
+Either side closing the TLS connection terminates the session.
 
-#### `0x04` Auth (client -> server)
+#### Authentication messages (not yet implemented)
 
-Sent by the client after receiving `HelloAck` when authentication is required.
-
-```mermaid
-packet-beta
-title Auth payload
-0-7: "Tag = 0x04"
-8-15: "Hash length (u8)"
-16-..: "Hash (UTF-8, variable, up to 255)"
-```
-
-* `Hash`: the Argon2 hash (PHC string) of the user's passphrase computed with
-  the `Salt` received in `HelloAck`. The server compares this directly against
-  its own stored hash.
-
-#### `0x05` AuthAck (server -> client)
-
-Sent by the server when the client's `Auth` hash matches the server's stored
-hash. The payload contains only the tag byte.
-
-#### `0x03` AuthFailed (server -> client)
-
-Sent by the server when the client's `Auth` hash does not match, or when
-authentication is required but the client did not send `Auth`. The server
-closes the TCP connection immediately after sending this message.
+`AuthChallenge`, `AuthResponse`, and `AuthResult` are defined in the protocol
+enum but the server currently skips authentication. Future work will implement
+a challenge-response flow here.
 
 ### Lifecycle
 
-1. Client opens a TCP connection (with `TCP_NODELAY`) to `host:port` within the
-   connect timeout.
-2. Client sends `Hello`.
-3. Server sends `HelloAck` containing its hash. An empty hash indicates
-   authentication is not configured on the server.
-4. Client behavior after `HelloAck`:
-   * If the client requires auth but the server sent an empty hash, the client
-     treats the connection as failed (insecure server).
-   * If the client has a stored server hash and the new hash differs, the
-     client treats the connection as failed (server changed passphrase).
-   * Otherwise, the client extracts the salt from the server's hash, computes
-     `argon2(passphrase, salt)`, and sends `Auth`.
-5. Server verifies the `Auth` hash:
-   * If `require_auth` is disabled: server accepts any hash.
-   * If `require_auth` is enabled and the hash matches: server sends
-     `AuthAck` and records the peer IP.
-   * If `require_auth` is enabled and the hash does not match: server sends
-     `AuthFailed` and closes the connection.
-
-   The client always sends `Auth` regardless of whether the server has
-   authentication configured; the server simply skips verification when
-   `require_auth` is false.
-6. Client reads the server's reply. `AuthFailed` is reported as an authentication
-   error in the UI.
-7. Client opens a UDP socket and `connect()`s it to the same `host:port`. UDP
-   packets may now flow.
-8. Both sides keep the TCP socket open as a liveness signal. Either side
-   closing it terminates the session.
-9. When the server observes the TCP stream close, it removes the peer IP from
-   its authorized set; subsequent UDP packets from that IP are dropped.
-10. The client also reads from the TCP socket in a background thread; an `EOF`
-    or read error surfaces as a `Disconnected` event in the UI.
-
-The control channel is currently silent after `AuthAck`. Future work may add
-control messages for things like clipboard sync or screen geometry.
+1. Client resolves `host:port` and opens a TCP connection within the connect
+   timeout.
+2. Client and server perform a TLS 1.3 handshake within the TLS timeout.
+   * Server presents its self-signed Ed25519 certificate.
+   * Client verifies the certificate against its stored TOFU fingerprint (or
+     probes and stores it on first connect).
+3. Server sends `SessionInit` containing the session parameters.
+4. Client validates `SessionInit.encrypt` against its local preference. If they
+   differ, the client aborts the connection.
+5. Client binds a UDP socket and may begin sending event datagrams tagged with
+   `conn_id`.
+6. Both sides enter a keepalive loop, exchanging `Keepalive` over TLS every
+   30 s and monitoring the stream for EOF.
+7. When the TLS stream closes, the server removes the session from its table;
+   subsequent UDP packets with that `conn_id` are dropped.
+8. The client surfaces a TLS EOF or read error as a `Disconnected` event in the
+   UI.
 
 ## UDP input plane
 
 Each datagram carries exactly one event. There is no length prefix or framing
-beyond the UDP boundary itself. Events from sources whose IP is not in the
-authorized set are silently dropped.
+beyond the UDP boundary itself.
 
-### Datagram layout
-
-```mermaid
-packet-beta
-title UDP datagram
-0-7: "Tag (u8)"
-8-63: "Body (variable)"
-```
-
-### Events
-
-#### `0x01` KeyDown
+### Plaintext datagram layout
 
 ```mermaid
 packet-beta
-title KeyDown
-0-7: "Tag = 0x01"
-8-15: "Length (u8)"
-16-63: "Key name (UTF-8, variable)"
+title UDP datagram (plaintext)
+0-63: "ConnId (u64 LE)"
+64-..: "Event (postcard-serialized)"
 ```
 
-`Length` is the byte length (0..=255) of a UTF-8 key name (see
-[Key naming](#key-naming)).
+The payload after `ConnId` is a `postcard` encoding of the `Event` enum:
 
-#### `0x02` KeyUp
-
-Same layout as `KeyDown`, with tag `0x02`.
-
-#### `0x06` KeyRepeat
-
-Same layout as `KeyDown`, with tag `0x06`. Refreshes the server's "this key is
-held" timer; emitted by the client key repeat. The OS auto-repeat events are
-deliberately *not* forwarded.
-
-#### `0x03` MouseMove
-
-```mermaid
-packet-beta
-title MouseMove
-0-7: "Tag = 0x03"
-8-23: "dx (i16 LE)"
-24-39: "dy (i16 LE)"
+```rust
+pub enum Event {
+    KeyDown(String),
+    KeyUp(String),
+    MouseMove { dx: i16, dy: i16 },
+    MouseButton { button: u8, pressed: bool },
+    Wheel { dx: i8, dy: i8 },
+    KeyRepeat(String),
+    Keepalive,
+}
 ```
 
-Relative deltas in pixels.
+* `KeyDown` / `KeyUp` / `KeyRepeat`: carry a UTF-8 key name (see
+  [Key naming](#key-naming)).
+* `MouseMove`: relative deltas in pixels (`i16` each).
+* `MouseButton`: `button` is an evdev-like code (`1`=left, `2`=middle,
+  `3`=right, `8`=back, `9`=forward); `pressed` is `true` for down, `false` for
+  up.
+* `Wheel`: discrete scroll deltas. Lines are passed through; pixel deltas are
+  divided by 10. Both axes are clamped to `i8` range.
+* `Keepalive`: sent by the client over UDP as a lightweight liveness signal.
 
-#### `0x04` MouseButton
-
-```mermaid
-packet-beta
-title MouseButton
-0-7: "Tag = 0x04"
-8-15: "Button (u8)"
-16-23: "Pressed (u8)"
-```
-
-* `Button`: button code. Maps to evdev-like values: `1`=left, `2`=middle,
-  `3`=right, `8`=back, `9`=forward.
-* `Pressed`: `1` for press, `0` for release.
-
-#### `0x05` Wheel
-
-```mermaid
-packet-beta
-title Wheel
-0-7: "Tag = 0x05"
-8-15: "dx (i8)"
-16-23: "dy (i8)"
-```
-
-Discrete scroll deltas. Lines are passed through; pixel deltas are divided by
-10. Both axes are clamped to `i8` range.
+Events from an unknown `ConnId` are silently dropped.
 
 ## Key naming
 
@@ -265,7 +190,7 @@ loop, it runs the rules below and prints the resulting actions.
 
 After processing a datagram, and after every idle wake of the recv loop
 (approximately every 200 ms), the server sweeps the map: any key whose last
-recorded time is older than `KEY_TIMEOUT` is released with
+recorded time is older than `key_timeout_ms` is released with
 `release name (timeout)` and removed.
 
 Currently the server only logs these actions; it does not synthesize input on
@@ -281,14 +206,14 @@ The client maintains `pressed_keys: HashSet<String>`.
   it and send `KeyDown`. If it is already present (OS auto-repeat), the event
   is suppressed.
 * On a native key release event, remove the name and send `KeyUp`.
-* Every `500 ms` while a session is active, send `KeyRepeat` for every name
-  in `pressed_keys`. This is the only source of `KeyRepeat` traffic.
+* Every `key_timeout_ms / 2` milliseconds while a session is active, send
+  `KeyRepeat` for every name in `pressed_keys`. This is the only source of
+  `KeyRepeat` traffic.
 * On `Disconnect` or `ConnectionLost`, clear `pressed_keys`.
 
 This keeps held-key traffic at roughly 2 packets per second per held key,
 regardless of OS auto-repeat rate, while the key repeat still allows one
-dropped UDP datagram before the server times the key out (key repeat 500 ms,
-timeout 1 s).
+dropped UDP datagram before the server times the key out.
 
 ### Mouse
 
@@ -301,10 +226,9 @@ timeout 1 s).
 
 ## Versioning
 
-`PROTOCOL_VERSION = 1` is the only version defined. The handshake is designed
-so that future server versions can negotiate down to `1` for older clients,
-and clients can refuse to proceed if the server returns `0`.
+There is no explicit protocol version negotiation. TLS ALPN (`spud/1`) is used
+to allow future incompatible iterations to be distinguished at the TLS layer.
 
-Feature flags will use the bitmap in `Hello`/`HelloAck` once concrete features
-are introduced. The current implementation negotiates them with `client &
-server` but does not consult the result.
+The `SessionInit` message carries all runtime parameters, so adding new fields
+to it (or new `ControlMsg` variants) is backward-compatible for clients that
+ignore unknown fields.
