@@ -28,7 +28,8 @@ All multi-byte integers are little-endian.
 
 The server generates a self-signed Ed25519 certificate on first start and
 persists it to `~/.config/spud/cert.pem` and `key.pem`. The certificate's
-SHA-256 fingerprint is its identity.
+SPKI (Subject Public Key Info) SHA-256 fingerprint is its identity. If x509
+parsing fails, the full DER is hashed as a fallback.
 
 The client uses **trust on first use** (TOFU):
 
@@ -62,7 +63,7 @@ is a `postcard`-serialized `ControlMsg`.
 
 ```rust
 pub enum ControlMsg {
-    AuthChallenge { nonce: [u8; 32] },
+    AuthChallenge { nonce: [u8; 32], phc: String },
     AuthResponse  { hmac: [u8; 32] },
     AuthResult    { ok: bool },
     SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, key_timeout_ms: u16 },
@@ -84,18 +85,41 @@ session.
 * `key_timeout_ms`: server key-release timeout in milliseconds. The client
   derives its key-repeat interval from this value (`key_timeout_ms / 2`).
 
-#### `Keepalive` (bidirectional)
+#### `Keepalive` (client -> server)
 
-Sent periodically (every 30 s) by both sides over the TLS stream to detect
-silent disconnects. The payload is empty except for the `ControlMsg` tag.
+Sent periodically (every 30 s) by the client over the TLS stream to keep the
+session alive. The server monitors the stream for EOF and checks idle timeout
+every 60 s. The payload is empty except for the `ControlMsg` tag.
 
 Either side closing the TLS connection terminates the session.
 
-#### Authentication messages (not yet implemented)
+#### `AuthChallenge` (server -> client)
 
-`AuthChallenge`, `AuthResponse`, and `AuthResult` are defined in the protocol
-enum but the server currently skips authentication. Future work will implement
-a challenge-response flow here.
+Sent when the server has `require_auth` enabled and a passphrase is configured.
+
+* `nonce`: 32 random bytes.
+* `phc`: The server's stored passphrase hash in PHC string format (Argon2id).
+  The client extracts the salt from this string to re-derive the hash.
+
+The client must respond with an `AuthResponse` within 10 seconds.
+
+#### `AuthResponse` (client -> server)
+
+Sent by the client in reply to `AuthChallenge`.
+
+* `hmac`: HMAC-SHA256 of the 32-byte nonce. The key is the Argon2id hash output
+  derived from the user's plaintext passphrase and the salt extracted from the
+  PHC string in `AuthChallenge`.
+
+#### `AuthResult` (server -> client)
+
+Sent after the server verifies the client's `AuthResponse`.
+
+* `ok: true` -- authentication succeeded. The server sends `SessionInit` next.
+* `ok: false` -- authentication failed. The server closes the TLS connection.
+
+If the server does not require auth, it skips `AuthChallenge`/`AuthResponse`
+and sends `SessionInit` immediately after the TLS handshake.
 
 ### Lifecycle
 
@@ -105,16 +129,20 @@ a challenge-response flow here.
    * Server presents its self-signed Ed25519 certificate.
    * Client verifies the certificate against its stored TOFU fingerprint (or
      probes and stores it on first connect).
-3. Server sends `SessionInit` containing the session parameters.
-4. Client validates `SessionInit.encrypt` against its local preference. If they
+3. If auth is required, the server sends `AuthChallenge` and waits for
+   `AuthResponse`. It verifies the HMAC and sends `AuthResult`.
+4. Server sends `SessionInit` containing the session parameters.
+5. Client validates `SessionInit.encrypt` against its local preference. If they
    differ, the client aborts the connection.
-5. Client binds a UDP socket and may begin sending event datagrams tagged with
+6. Client binds a UDP socket and may begin sending event datagrams tagged with
    `conn_id`.
-6. Both sides enter a keepalive loop, exchanging `Keepalive` over TLS every
-   30 s and monitoring the stream for EOF.
-7. When the TLS stream closes, the server removes the session from its table;
+7. The client enters a keepalive loop, sending `Keepalive` over TLS every
+   30 s. The server monitors the stream for EOF and checks session idle time
+   every 60 s; if a session is idle for more than `SESSION_TIMEOUT` (300 s)
+   it is closed.
+8. When the TLS stream closes, the server removes the session from its table;
    subsequent UDP packets with that `conn_id` are dropped.
-8. The client surfaces a TLS EOF or read error as a `Disconnected` event in the
+9. The client surfaces a TLS EOF or read error as a `Disconnected` event in the
    UI.
 
 ## UDP input plane

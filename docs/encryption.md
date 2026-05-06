@@ -18,8 +18,8 @@ the LAN.
 
 The encryption layer does **not** protect against:
 * A compromised server (it sees decrypted events).
-* A malicious client connecting to a legitimate server (authorization is a
-  separate, not-yet-implemented layer).
+* A malicious client connecting to a legitimate server (mitigated by the
+  optional challenge-response authentication layer).
 * Traffic analysis (packet sizes and timing are not padded or obfuscated).
 
 ## Overview
@@ -29,6 +29,11 @@ sequenceDiagram
     participant C as Client
     participant S as Server
     C->>S: TCP + TLS 1.3 handshake
+    opt Auth required
+        S->>C: AuthChallenge { nonce, phc }
+        C->>S: AuthResponse { hmac }
+        S->>C: AuthResult { ok: true }
+    end
     S->>C: SessionInit { encrypt: true }
     par Key export (client)
         C->>C: export_keying_material("spud/udp/keys/v1")
@@ -227,6 +232,7 @@ pub struct SessionState {
     pub last_activity: Instant,          // for timeout and keepalive
     pub src_addr: SocketAddr,            // last known UDP source
     pub encrypt: bool,                   // negotiated setting
+    pub failed_decrypts: u32,            // consecutive decrypt failures
 }
 ```
 
@@ -235,6 +241,8 @@ removed when:
 * The TLS stream closes.
 * A `cancel` token fires (server shutdown / restart).
 * The session is idle for more than `SESSION_TIMEOUT` (300 s).
+* Ten consecutive UDP decrypt failures occur (rate-limiting against garbage
+  traffic).
 
 ## Security notes
 
