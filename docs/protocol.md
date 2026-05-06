@@ -25,7 +25,7 @@ All multi-byte integers are little-endian.
 | `CTRL_AUTH`        | `0x04`           | Client auth response.                    |
 | `CTRL_AUTH_ACK`    | `0x05`           | Server auth acceptance.                  |
 | `KEY_TIMEOUT`      | `1 s`            | Server releases held keys with no recent activity. |
-| Heartbeat interval | `500 ms`         | Client refresh cadence for held keys.    |
+| Key repeat interval | `500 ms`         | Client refresh cadence for held keys.    |
 | Connect timeout    | `5 s`            | Client TCP connect + handshake budget.   |
 
 ## TCP control plane
@@ -192,7 +192,7 @@ Same layout as `KeyDown`, with tag `0x02`.
 #### `0x06` KeyRepeat
 
 Same layout as `KeyDown`, with tag `0x06`. Refreshes the server's "this key is
-held" timer; emitted by the client heartbeat. The OS auto-repeat events are
+held" timer; emitted by the client key repeat. The OS auto-repeat events are
 deliberately *not* forwarded.
 
 #### `0x03` MouseMove
@@ -286,8 +286,8 @@ The client maintains `pressed_keys: HashSet<String>`.
 * On `Disconnect` or `ConnectionLost`, clear `pressed_keys`.
 
 This keeps held-key traffic at roughly 2 packets per second per held key,
-regardless of OS auto-repeat rate, while the heartbeat still allows one
-dropped UDP datagram before the server times the key out (heartbeat 500 ms,
+regardless of OS auto-repeat rate, while the key repeat still allows one
+dropped UDP datagram before the server times the key out (key repeat 500 ms,
 timeout 1 s).
 
 ### Mouse

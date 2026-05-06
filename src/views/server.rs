@@ -50,6 +50,7 @@ pub enum Message {
     IconChanged(ServerIcon),
     NameChanged(String),
     KeyTimeoutChanged(u16),
+    EncryptUdpToggled(bool),
 }
 
 #[derive(Clone, PartialEq)]
@@ -62,6 +63,7 @@ struct RunningConfig {
     name: String,
     icon: ServerIcon,
     key_timeout_ms: u16,
+    encrypt_udp: bool,
 }
 
 pub struct State {
@@ -80,6 +82,7 @@ pub struct State {
     listener: Option<crate::net::Listener>,
     key_timeout_ms: u16,
     last_error: Option<String>,
+    encrypt_udp: bool,
 }
 
 impl Default for State {
@@ -106,6 +109,7 @@ impl State {
             registration: None,
             listener: None,
             last_error: None,
+            encrypt_udp: cfg.encrypt_udp,
         }
     }
 
@@ -119,6 +123,7 @@ impl State {
             require_auth: self.require_auth,
             passphrase_hash: self.passphrase_hash.clone(),
             key_timeout_ms: self.key_timeout_ms,
+            encrypt_udp: self.encrypt_udp,
         }
     }
 }
@@ -134,6 +139,7 @@ impl State {
             name: self.name.clone(),
             icon: self.icon,
             key_timeout_ms: self.key_timeout_ms,
+            encrypt_udp: self.encrypt_udp,
         }
     }
 
@@ -171,12 +177,15 @@ impl State {
         } else {
             self.bind_address.as_str()
         };
-        let listener = crate::net::Listener::bind(
-            addr,
-            port,
-            self.key_timeout_ms,
-            self.require_auth,
-            self.passphrase_hash.clone(),
+        let listener = tokio::runtime::Handle::current().block_on(
+            crate::net::Listener::bind(
+                addr,
+                port,
+                self.key_timeout_ms,
+                self.require_auth,
+                self.passphrase_hash.clone(),
+                self.encrypt_udp,
+            )
         )?;
         self.listener = Some(listener);
         Ok(())
@@ -246,6 +255,7 @@ impl State {
             Message::KeyTimeoutChanged(v) => {
                 self.key_timeout_ms = (v / 50) * 50;
             }
+            Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
         }
     }
 
@@ -616,7 +626,20 @@ impl State {
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
-        let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
+        let encrypt_card = ui::card(
+            row![
+                column![
+                    text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Encrypt input events with AES-256-GCM over UDP."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+        let body = column![auth_card, ui::v_space(16.0), passphrase_card, ui::v_space(16.0), encrypt_card].spacing(0);
         ui::page_body("Security", body)
     }
 

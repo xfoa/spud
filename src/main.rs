@@ -2,11 +2,14 @@ use iced::window::settings::PlatformSpecific;
 
 mod app;
 mod components;
+mod cert;
 mod config;
+mod crypto;
 mod discovery;
 mod icons;
 mod input;
 mod net;
+mod session;
 mod theme;
 mod views;
 
