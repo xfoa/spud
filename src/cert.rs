@@ -130,14 +130,15 @@ impl ServerCertVerifier for FingerprintVerifier {
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        let supported = rustls::crypto::ring::default_provider().signature_verification_algorithms;
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &supported)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![SignatureScheme::ED25519, SignatureScheme::ECDSA_NISTP256_SHA256]
+        vec![SignatureScheme::ED25519]
     }
 }

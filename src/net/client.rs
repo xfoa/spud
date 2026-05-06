@@ -54,15 +54,16 @@ impl rustls::client::danger::ServerCertVerifier for ProbeVerifier {
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        let supported = rustls::crypto::ring::default_provider().signature_verification_algorithms;
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &supported)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![rustls::SignatureScheme::ED25519, rustls::SignatureScheme::ECDSA_NISTP256_SHA256]
+        vec![rustls::SignatureScheme::ED25519]
     }
 }
 
