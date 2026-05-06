@@ -186,7 +186,7 @@ impl State {
                 self.last_error = None;
                 // TODO: Phase 3 - wire passphrase into TLS auth
                 // TODO: Phase 5 - run this via Task::perform instead of block_on
-                let passphrase = if self.require_auth { Some(self.passphrase.clone()) } else { None };
+                let passphrase = self.connection_passphrase().map(|s| s.to_string());
                 match tokio::runtime::Handle::current().block_on(
                     crate::net::Sender::connect(&self.host, port, self.encrypt_udp, passphrase)
                 ) {

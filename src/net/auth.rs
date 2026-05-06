@@ -49,3 +49,35 @@ pub fn server_verify_response(stored_phc: &str, challenge: &[u8; 32], client_res
     };
     expected.ct_eq(client_response).into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::hash_passphrase;
+
+    #[test]
+    fn auth_roundtrip() {
+        let passphrase = "correct horse battery staple";
+        let stored_phc = hash_passphrase(passphrase);
+        assert!(!stored_phc.is_empty(), "PHC hash should not be empty");
+
+        let challenge = generate_challenge();
+        let client_response = client_compute_response(passphrase, &stored_phc, &challenge)
+            .expect("client should compute response");
+        let expected = server_compute_expected(&stored_phc, &challenge)
+            .expect("server should compute expected");
+
+        assert_eq!(client_response, expected, "client and server HMACs should match");
+        assert!(server_verify_response(&stored_phc, &challenge, &client_response));
+    }
+
+    #[test]
+    fn auth_wrong_passphrase_fails() {
+        let stored_phc = hash_passphrase("right password");
+        let challenge = generate_challenge();
+        let client_response = client_compute_response("wrong password", &stored_phc, &challenge)
+            .expect("client should compute response even with wrong password");
+
+        assert!(!server_verify_response(&stored_phc, &challenge, &client_response));
+    }
+}

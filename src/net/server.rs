@@ -209,9 +209,20 @@ async fn handle_client(
         };
         let auth_ok = match postcard::from_bytes::<ControlMsg>(&response) {
             Ok(ControlMsg::AuthResponse { hmac }) => {
-                crate::net::auth::server_verify_response(&passphrase_hash, &challenge, &hmac)
+                let ok = crate::net::auth::server_verify_response(&passphrase_hash, &challenge, &hmac);
+                if !ok {
+                    eprintln!("[spud] auth failed for {peer}: response mismatch");
+                }
+                ok
             }
-            _ => false,
+            Ok(_) => {
+                eprintln!("[spud] auth failed for {peer}: expected AuthResponse, got other message");
+                false
+            }
+            Err(e) => {
+                eprintln!("[spud] auth failed for {peer}: failed to parse response: {e}");
+                false
+            }
         };
 
         let result_msg = ControlMsg::AuthResult { ok: auth_ok };
