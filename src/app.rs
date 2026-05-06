@@ -39,36 +39,22 @@ async fn reconnect(
     host: String,
     port: u16,
     passphrase: Option<String>,
-    passphrase_changed: bool,
-    require_auth: bool,
-    stored_hash: String,
+    _passphrase_changed: bool,
+    _require_auth: bool,
+    _stored_hash: String,
+    client_encrypt: bool,
     timeout: std::time::Duration,
 ) -> Result<crate::net::Sender, ()> {
-    let (tx, rx) = iced::futures::channel::oneshot::channel();
-    std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            let pass = passphrase.as_deref();
-            match crate::net::Sender::connect(
-                &host,
-                port,
-                pass,
-                passphrase_changed,
-                require_auth,
-                &stored_hash,
-            ) {
-                Ok(sender) => {
-                    let _ = tx.send(Ok(sender));
-                    return;
-                }
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                }
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        match crate::net::Sender::connect(&host, port, client_encrypt, passphrase.clone()).await {
+            Ok(sender) => return Ok(sender),
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
-        let _ = tx.send(Err(()));
-    });
-    rx.await.unwrap_or(Err(()))
+    }
+    Err(())
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +174,7 @@ impl Spud {
                     let passphrase_changed = passphrase.is_some();
                     let require_auth = self.client.require_auth();
                     let stored_hash = self.client.passphrase_hash().to_string();
+                    let client_encrypt = self.client.encrypt_udp();
                     return Task::perform(
                         reconnect(
                             host,
@@ -196,6 +183,7 @@ impl Spud {
                             passphrase_changed,
                             require_auth,
                             stored_hash,
+                            client_encrypt,
                             timeout,
                         ),
                         move |result| match result {
@@ -257,8 +245,8 @@ impl Spud {
 
         if self.client.is_connected() {
             subs.push(
-                iced::time::every(self.client.heartbeat_interval())
-                    .map(|_| Message::Client(client::Message::HeartbeatTick)),
+                iced::time::every(self.client.keyrepeat_interval())
+                    .map(|_| Message::Client(client::Message::KeyRepeatTick)),
             );
             subs.push(
                 iced::time::every(self.client.keepalive_interval())

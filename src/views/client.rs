@@ -72,12 +72,13 @@ pub enum Message {
     ConnectionLost,
     ReconnectSuccess(crate::net::Sender, u64),
     ReconnectFailed(u64),
-    HeartbeatTick,
+    KeyRepeatTick,
     KeepaliveTick,
     KeepaliveIntervalChanged(u16),
     ReconnectTimeoutChanged(String),
     BlankScreenToggled(bool),
     ShowHotkeyOnBlankToggled(bool),
+    EncryptUdpToggled(bool),
 }
 
 pub struct State {
@@ -91,6 +92,7 @@ pub struct State {
     hotkey: String,
     require_auth: bool,
     passphrase: String,
+    pending_passphrase: String,
     passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
     pub hotkey_dialog_open: bool,
@@ -100,7 +102,7 @@ pub struct State {
     last_error: Option<String>,
     pressed_keys: HashSet<String>,
     cursor_inside: bool,
-    heartbeat_interval_ms: u64,
+    keyrepeat_interval_ms: u64,
     reconnecting: bool,
     reconnect_generation: u64,
     keepalive_interval_ms: u16,
@@ -108,6 +110,7 @@ pub struct State {
     blank_screen: bool,
     show_hotkey_on_blank: bool,
     grabbed: bool,
+    encrypt_udp: bool,
 }
 
 impl Default for State {
@@ -129,6 +132,7 @@ impl State {
             hotkey: cfg.hotkey.clone(),
             require_auth: cfg.require_auth,
             passphrase: String::new(),
+            pending_passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
             hotkey_dialog_open: false,
@@ -138,7 +142,7 @@ impl State {
             last_error: None,
             pressed_keys: HashSet::new(),
             cursor_inside: true,
-            heartbeat_interval_ms: 500,
+            keyrepeat_interval_ms: 500, // default when not connected; set from server's key_timeout_ms on connect
             reconnecting: false,
             reconnect_generation: 0,
             keepalive_interval_ms: cfg.keepalive_interval_ms,
@@ -146,6 +150,7 @@ impl State {
             blank_screen: cfg.blank_screen,
             show_hotkey_on_blank: cfg.show_hotkey_on_blank,
             grabbed: false,
+            encrypt_udp: cfg.encrypt_udp,
         }
     }
 
@@ -163,6 +168,7 @@ impl State {
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
             blank_screen: self.blank_screen,
             show_hotkey_on_blank: self.show_hotkey_on_blank,
+            encrypt_udp: self.encrypt_udp,
         }
     }
 }
@@ -170,7 +176,15 @@ impl State {
 impl State {
     pub fn update(&mut self, message: Message) {
         match message {
-            Message::SelectPage(p) => self.page = p,
+            Message::SelectPage(p) => {
+                if self.page == Page::Security && p != Page::Security {
+                    if !self.pending_passphrase.is_empty() {
+                        self.passphrase = self.pending_passphrase.clone();
+                    }
+                    self.pending_passphrase.clear();
+                }
+                self.page = p;
+            }
             Message::HostChanged(s) => self.host = s,
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
@@ -180,29 +194,14 @@ impl State {
             Message::Connect => {
                 let port = self.port.parse::<u16>().unwrap_or(7878);
                 self.last_error = None;
-                let passphrase = if self.require_auth {
-                    Some(self.passphrase.as_str()).filter(|p| !p.is_empty())
-                } else {
-                    None
-                };
-                if self.require_auth && passphrase.is_none() && self.passphrase_hash.is_empty() {
-                    self.last_error = Some("Passphrase required.".to_string());
-                    return;
-                }
-                let passphrase_changed = !self.passphrase.is_empty();
-                match crate::net::Sender::connect(
-                    &self.host,
-                    port,
-                    passphrase,
-                    passphrase_changed,
-                    self.require_auth,
-                    &self.passphrase_hash,
+                // TODO: Phase 3 - wire passphrase into TLS auth
+                // TODO: Phase 5 - run this via Task::perform instead of block_on
+                let passphrase = self.connection_passphrase().map(|s| s.to_string());
+                match tokio::runtime::Handle::current().block_on(
+                    crate::net::Sender::connect(&self.host, port, self.encrypt_udp, passphrase)
                 ) {
                     Ok(s) => {
-                        self.heartbeat_interval_ms = u64::from(s.key_timeout_ms) / 2;
-                        self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
-                        self.passphrase_hash = s.client_hash.clone();
-                        self.passphrase.clear();
+                        self.keyrepeat_interval_ms = (u64::from(s.key_timeout_ms) / 2).max(50);
                         self.sender = Some(s);
                         self.connected = true;
                     }
@@ -217,7 +216,6 @@ impl State {
                 self.last_cursor = None;
                 self.last_error = None;
                 self.pressed_keys.clear();
-                self.heartbeat_interval_ms = 500;
                 self.reconnecting = false;
                 self.reconnect_generation += 1;
                 self.grabbed = false;
@@ -228,7 +226,6 @@ impl State {
                     self.sender = None;
                     self.last_cursor = None;
                     self.pressed_keys.clear();
-                    self.heartbeat_interval_ms = 500;
                     self.reconnecting = true;
                     self.reconnect_generation += 1;
                     self.grabbed = false;
@@ -236,8 +233,7 @@ impl State {
             }
             Message::ReconnectSuccess(sender, gen) => {
                 if self.reconnecting && self.reconnect_generation == gen {
-                    self.heartbeat_interval_ms = u64::from(sender.key_timeout_ms) / 2;
-                    self.heartbeat_interval_ms = self.heartbeat_interval_ms.max(50);
+                    self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
                     self.sender = Some(sender);
                     self.connected = true;
                     self.reconnecting = false;
@@ -256,7 +252,7 @@ impl State {
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
             Message::CaptureModeChanged(m) => self.capture_mode = m,
             Message::RequireAuthToggled(v) => self.require_auth = v,
-            Message::PassphraseChanged(s) => self.passphrase = s,
+            Message::PassphraseChanged(s) => self.pending_passphrase = s,
             Message::SelectDiscovered(i) => {
                 if let Some(server) = self.discovered.get(i) {
                     self.host = server.host.clone();
@@ -265,7 +261,7 @@ impl State {
             }
             Message::DiscoveryEvent(event) => match event {
                 discovery::Event::Found(server) => {
-                    self.discovered.retain(|s| s.fullname != server.fullname);
+                    self.discovered.retain(|s| s.address != server.address);
                     self.discovered.push(server);
                     self.discovered.sort_by(|a, b| a.name.cmp(&b.name));
                 }
@@ -359,7 +355,7 @@ impl State {
                     }
                 }
             }
-            Message::HeartbeatTick => {
+            Message::KeyRepeatTick => {
                 if let Some(sender) = &self.sender {
                     for name in &self.pressed_keys {
                         sender.send(&crate::net::Event::KeyRepeat(name.clone()));
@@ -368,7 +364,7 @@ impl State {
             }
             Message::KeepaliveTick => {
                 if let Some(sender) = &self.sender {
-                    sender.send(&crate::net::Event::Heartbeat);
+                    sender.send(&crate::net::Event::Keepalive);
                 }
             }
             Message::KeepaliveIntervalChanged(v) => {
@@ -381,6 +377,7 @@ impl State {
             }
             Message::BlankScreenToggled(v) => self.blank_screen = v,
             Message::ShowHotkeyOnBlankToggled(v) => self.show_hotkey_on_blank = v,
+            Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
         }
     }
 
@@ -396,8 +393,8 @@ impl State {
         self.connected && self.capture_mode == CaptureMode::Hotkey
     }
 
-    pub fn heartbeat_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.heartbeat_interval_ms)
+    pub fn keyrepeat_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.keyrepeat_interval_ms)
     }
 
     pub fn keepalive_interval(&self) -> std::time::Duration {
@@ -462,6 +459,10 @@ impl State {
 
     pub fn hotkey_string(&self) -> &str {
         &self.hotkey
+    }
+
+    pub fn encrypt_udp(&self) -> bool {
+        self.encrypt_udp
     }
 
     pub fn nav_items(&self, about_active: bool) -> Vec<Element<'_, Message>> {
@@ -910,7 +911,7 @@ impl State {
             ui::v_space(4.0).into(),
             ui::helper_text("Must match the passphrase set on the server.").into(),
             ui::v_space(16.0).into(),
-            text_input("Enter passphrase", &self.passphrase)
+            text_input("Enter passphrase", &self.pending_passphrase)
                 .on_input(Message::PassphraseChanged)
                 .secure(true)
                 .padding(12)
@@ -918,25 +919,25 @@ impl State {
                 .into(),
         ];
 
-        if !self.passphrase.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is set.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
-        } else if self.passphrase_hash.is_empty() {
-            passphrase_items.push(ui::v_space(8.0).into());
-            if self.require_auth {
+        if self.pending_passphrase.is_empty() {
+            if !self.passphrase.is_empty() {
+                passphrase_items.push(ui::v_space(8.0).into());
+                passphrase_items.push(
+                    row![
+                        text(icons::LOCK)
+                            .font(icons::FA_SOLID)
+                            .size(11)
+                            .color(mt::SUCCESS),
+                        text("Passphrase is set.")
+                            .size(12)
+                            .color(mt::SUCCESS),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            } else if self.require_auth {
+                passphrase_items.push(ui::v_space(8.0).into());
                 passphrase_items.push(
                     row![
                         text(icons::TRIANGLE_EXCLAMATION)
@@ -952,27 +953,24 @@ impl State {
                     .into(),
                 );
             }
-        } else {
-            passphrase_items.push(ui::v_space(8.0).into());
-            passphrase_items.push(
-                row![
-                    text(icons::LOCK)
-                        .font(icons::FA_SOLID)
-                        .size(11)
-                        .color(mt::SUCCESS),
-                    text("Passphrase is saved. Type a new one to change it.")
-                        .size(12)
-                        .color(mt::SUCCESS),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center)
-                .into(),
-            );
         }
 
         let passphrase_card = ui::card(column(passphrase_items).spacing(0));
 
-        let body = column![auth_card, ui::v_space(16.0), passphrase_card].spacing(0);
+        let encrypt_card = ui::card(
+            row![
+                column![
+                    text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
+                    ui::v_space(2.0),
+                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but may be faster."),
+                ]
+                .width(Length::Fill),
+                checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+        let body = column![auth_card, ui::v_space(16.0), passphrase_card, ui::v_space(16.0), encrypt_card].spacing(0);
         ui::page_body("Security", body)
     }
 

@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use argon2::{Argon2, PasswordHasher};
 use argon2::password_hash::{PasswordHash, SaltString, rand_core::OsRng};
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 
 use crate::icons;
 
 const APP_DIR: &str = "spud";
 const CONFIG_FILE: &str = "config.toml";
+const KNOWN_SERVERS_FILE: &str = "known_servers.toml";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -93,6 +96,7 @@ pub struct ServerConfig {
     pub require_auth: bool,
     pub passphrase_hash: String,
     pub key_timeout_ms: u16,
+    pub encrypt_udp: bool,
 }
 
 impl Default for ServerConfig {
@@ -106,6 +110,7 @@ impl Default for ServerConfig {
             require_auth: true,
             passphrase_hash: String::new(),
             key_timeout_ms: 1000,
+            encrypt_udp: true,
         }
     }
 }
@@ -125,6 +130,7 @@ pub struct ClientConfig {
     pub reconnect_timeout_secs: u16,
     pub blank_screen: bool,
     pub show_hotkey_on_blank: bool,
+    pub encrypt_udp: bool,
 }
 
 impl Default for ClientConfig {
@@ -138,10 +144,11 @@ impl Default for ClientConfig {
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
             passphrase_hash: String::new(),
-            keepalive_interval_ms: 50,
+            keepalive_interval_ms: 100,
             reconnect_timeout_secs: 30,
             blank_screen: false,
             show_hotkey_on_blank: true,
+            encrypt_udp: true,
         }
     }
 }
@@ -166,6 +173,13 @@ pub fn config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(APP_DIR)
         .join(CONFIG_FILE)
+}
+
+pub fn known_servers_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_DIR)
+        .join(KNOWN_SERVERS_FILE)
 }
 
 impl Config {
@@ -204,4 +218,59 @@ impl Config {
             Err(e) => eprintln!("Failed to serialize config: {e}"),
         }
     }
+}
+
+/// Load the known-servers trust store.
+pub fn load_known_servers() -> HashMap<String, String> {
+    let path = known_servers_path();
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => toml::from_str(&contents).unwrap_or_default(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(e) => {
+            eprintln!("Failed to read known servers at {}: {e}", path.display());
+            HashMap::new()
+        }
+    }
+}
+
+/// Save the known-servers trust store.
+pub fn save_known_servers(known: &HashMap<String, String>) {
+    let path = known_servers_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("Failed to create config directory {}: {e}", parent.display());
+            return;
+        }
+    }
+    match toml::to_string_pretty(known) {
+        Ok(contents) => {
+            if let Err(e) = std::fs::write(&path, contents) {
+                eprintln!("Failed to write known servers to {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("Failed to serialize known servers: {e}"),
+    }
+}
+
+/// Check if a server's fingerprint is trusted.
+pub fn is_trusted(host: &str, port: u16, fingerprint: &[u8; 32]) -> bool {
+    let known = load_known_servers();
+    let key = format!("{host}:{port}");
+    if let Some(stored) = known.get(&key) {
+        if let Ok(stored_bytes) = hex::decode(stored) {
+            if stored_bytes.len() == 32 {
+                let stored_array: [u8; 32] = stored_bytes.try_into().unwrap();
+                return fingerprint.as_slice().ct_eq(stored_array.as_slice()).into();
+            }
+        }
+    }
+    false
+}
+
+/// Trust a server's fingerprint.
+pub fn trust_server(host: &str, port: u16, fingerprint: [u8; 32]) {
+    let mut known = load_known_servers();
+    let key = format!("{host}:{port}");
+    known.insert(key, hex::encode(fingerprint));
+    save_known_servers(&known);
 }
