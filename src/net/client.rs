@@ -300,10 +300,10 @@ impl ClientConnection {
         // Handle auth challenge if present
         if let ControlMsg::AuthChallenge { nonce, phc } = msg {
             let passphrase = passphrase.ok_or_else(|| {
-                io::Error::new(io::ErrorKind::PermissionDenied, "authentication required but no passphrase provided")
+                io::Error::new(io::ErrorKind::PermissionDenied, "Authentication required but no passphrase provided")
             })?;
             let hmac = crate::net::auth::client_compute_response(&passphrase, &phc, &nonce)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "failed to compute auth response"))?;
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Authentication error: failed to compute auth response"))?;
             let response = ControlMsg::AuthResponse { hmac };
             let bytes = postcard::to_allocvec(&response)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -312,21 +312,21 @@ impl ClientConnection {
 
             let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
                 .await
-                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "auth result timeout"))?
-                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "server closed connection during auth"))?
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Authentication error: auth result timeout"))?
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "Authentication failed: server closed connection during auth"))?
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             msg = postcard::from_bytes(&frame)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
             if let ControlMsg::AuthResult { ok: false } = msg {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "authentication failed"));
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "Authentication failed: incorrect password"));
             }
             if let ControlMsg::AuthResult { ok: true } = msg {
                 // Read SessionInit next
                 let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
                     .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "handshake timeout after auth"))?
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "server closed connection after auth"))?
+                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Authentication failed: handshake timeout after auth"))?
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "Authentication failed: server closed connection after auth"))?
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                 msg = postcard::from_bytes(&frame)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -335,7 +335,7 @@ impl ClientConnection {
 
         let (conn_id, server_encrypt, key_timeout_ms) = match msg {
             ControlMsg::SessionInit { conn_id, encrypt, key_timeout_ms, .. } => (conn_id, encrypt, key_timeout_ms),
-            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "expected SessionInit")),
+            _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Connect failed: expected SessionInit")),
         };
 
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
