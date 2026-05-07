@@ -335,7 +335,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
 
     let mut badge_column = column![]
         .padding(10)
-        .spacing(6);
+        .spacing(4);
     if encrypt {
         badge_column = badge_column.push(
             container(
@@ -426,7 +426,8 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if encrypt {
         tip_items.push(
             row![
-                text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::SUCCESS),
+                container(text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::SUCCESS))
+                    .center(12),
                 text("Encrypted").size(11).color(mt::SUCCESS),
             ]
             .spacing(4)
@@ -436,7 +437,8 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if auth {
         tip_items.push(
             row![
-                text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(11).color(mt::WARNING),
+                container(text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(11).color(mt::WARNING))
+                    .center(12),
                 text("Passphrase required").size(11).color(mt::WARNING),
             ]
             .spacing(4)
