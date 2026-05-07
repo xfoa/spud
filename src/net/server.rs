@@ -68,6 +68,7 @@ async fn run_server(
 ) {
     let cancel = CancellationToken::new();
     let mut buf = vec![0u8; 2048];
+    let mut sweep_interval = tokio::time::interval(Duration::from_millis(200));
     loop {
         tokio::select! {
             _ = shutdown.notified() => break,
@@ -84,6 +85,13 @@ async fn run_server(
                     }
                     Err(e) => {
                         eprintln!("[spud] tcp accept: {e}");
+                    }
+                }
+            }
+            _ = sweep_interval.tick() => {
+                for mut session in sessions.iter_mut() {
+                    for action in session.tracker.sweep() {
+                        println!("[server] (timeout): {action}");
                     }
                 }
             }
@@ -126,8 +134,14 @@ async fn run_server(
                             if let Some(pt) = plaintext {
                                 session.record_decrypt_success();
                                 if let Some(event) = crate::net::Event::decode(&pt) {
-                                    // TODO: feed to input replay instead of just printing
-                                    println!("[server] {src}: {event:?}");
+                                    let actions = session.tracker.handle_event(&event);
+                                    if actions.is_empty() {
+                                        println!("[server] {src}: {event:?}");
+                                    } else {
+                                        for action in actions {
+                                            println!("[server] {src}: {action}");
+                                        }
+                                    }
                                 }
                             } else if session.encrypt {
                                 should_remove = session.record_decrypt_failure();
@@ -238,7 +252,7 @@ async fn handle_client(
     }
 
     let (uuid, conn_id) = generate_session();
-    let session = SessionState::new(encrypt_udp, keys, peer);
+    let session = SessionState::new(encrypt_udp, keys, peer, key_timeout_ms);
     sessions.insert(conn_id, session);
 
     let init = ControlMsg::SessionInit { conn_id, uuid, encrypt: encrypt_udp, key_timeout_ms };

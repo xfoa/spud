@@ -42,6 +42,7 @@ pub enum Event {
     MouseButton { button: u8, pressed: bool },
     Wheel { dx: i8, dy: i8 },
     KeyRepeat(String),
+    MouseButtonRepeat(u8),
     Keepalive,
 }
 

@@ -104,6 +104,7 @@ pub struct State {
     last_cursor: Option<Point>,
     last_error: Option<String>,
     pressed_keys: HashSet<String>,
+    pressed_mouse_buttons: HashSet<u8>,
     cursor_inside: bool,
     keyrepeat_interval_ms: u64,
     reconnecting: bool,
@@ -145,6 +146,7 @@ impl State {
             last_cursor: None,
             last_error: None,
             pressed_keys: HashSet::new(),
+            pressed_mouse_buttons: HashSet::new(),
             cursor_inside: true,
             keyrepeat_interval_ms: 500, // default when not connected; set from server's key_timeout_ms on connect
             reconnecting: false,
@@ -219,6 +221,7 @@ impl State {
                 self.last_cursor = None;
                 self.last_error = None;
                 self.pressed_keys.clear();
+                self.pressed_mouse_buttons.clear();
                 self.reconnecting = false;
                 self.reconnect_generation += 1;
                 self.grabbed = false;
@@ -230,6 +233,7 @@ impl State {
                     self.sender = None;
                     self.last_cursor = None;
                     self.pressed_keys.clear();
+                    self.pressed_mouse_buttons.clear();
                     self.reconnecting = true;
                     self.reconnect_generation += 1;
                     self.grabbed = false;
@@ -308,8 +312,12 @@ impl State {
                         for name in &self.pressed_keys {
                             sender.send(&crate::net::Event::KeyUp(name.clone()));
                         }
+                        for button in &self.pressed_mouse_buttons {
+                            sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
+                        }
                     }
                     self.pressed_keys.clear();
+                    self.pressed_mouse_buttons.clear();
                     return;
                 }
                 if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
@@ -332,7 +340,7 @@ impl State {
                 };
                 if forward {
                     if let Some(wire) =
-                        iced_to_wire(&event, &mut self.last_cursor, &mut self.pressed_keys)
+                        iced_to_wire(&event, &mut self.last_cursor, &mut self.pressed_keys, &mut self.pressed_mouse_buttons)
                     {
                         if let Some(sender) = &self.sender {
                             sender.send(&wire);
@@ -348,12 +356,16 @@ impl State {
                             for name in &self.pressed_keys {
                                 sender.send(&crate::net::Event::KeyUp(name.clone()));
                             }
+                            for button in &self.pressed_mouse_buttons {
+                                sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
+                            }
                         }
                         self.pressed_keys.clear();
+                        self.pressed_mouse_buttons.clear();
                     }
                     return;
                 }
-                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys) {
+                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons) {
                     if let Some(sender) = &self.sender {
                         sender.send(&wire);
                     }
@@ -363,6 +375,9 @@ impl State {
                 if let Some(sender) = &self.sender {
                     for name in &self.pressed_keys {
                         sender.send(&crate::net::Event::KeyRepeat(name.clone()));
+                    }
+                    for button in &self.pressed_mouse_buttons {
+                        sender.send(&crate::net::Event::MouseButtonRepeat(*button));
                     }
                 }
             }
@@ -973,7 +988,7 @@ impl State {
                 column![
                     text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
-                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but may be faster."),
+                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
                 ]
                 .width(Length::Fill),
                 {
@@ -1038,6 +1053,7 @@ fn iced_to_wire(
     event: &iced::Event,
     last_cursor: &mut Option<Point>,
     pressed_keys: &mut HashSet<String>,
+    pressed_mouse_buttons: &mut HashSet<u8>,
 ) -> Option<crate::net::Event> {
     use iced::keyboard;
     use iced::mouse;
@@ -1068,15 +1084,18 @@ fn iced_to_wire(
             *last_cursor = None;
             None
         }
-        iced::Event::Mouse(mouse::Event::ButtonPressed(b)) => Some(crate::net::Event::MouseButton {
-            button: map_iced_button(b),
-            pressed: true,
-        }),
+        iced::Event::Mouse(mouse::Event::ButtonPressed(b)) => {
+            let button = map_iced_button(b);
+            if pressed_mouse_buttons.insert(button) {
+                Some(crate::net::Event::MouseButton { button, pressed: true })
+            } else {
+                None
+            }
+        }
         iced::Event::Mouse(mouse::Event::ButtonReleased(b)) => {
-            Some(crate::net::Event::MouseButton {
-                button: map_iced_button(b),
-                pressed: false,
-            })
+            let button = map_iced_button(b);
+            pressed_mouse_buttons.remove(&button);
+            Some(crate::net::Event::MouseButton { button, pressed: false })
         }
         iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
             let (x, y) = match delta {
@@ -1096,6 +1115,7 @@ fn iced_to_wire(
 fn input_event_to_wire(
     event: &crate::input::InputEvent,
     pressed_keys: &mut HashSet<String>,
+    pressed_mouse_buttons: &mut HashSet<u8>,
 ) -> Option<crate::net::Event> {
     use crate::input::InputEvent;
     match event {
@@ -1116,10 +1136,17 @@ fn input_event_to_wire(
             dx: *dx,
             dy: *dy,
         }),
-        InputEvent::MouseButton { button, pressed } => Some(crate::net::Event::MouseButton {
-            button: *button,
-            pressed: *pressed,
-        }),
+        InputEvent::MouseButton { button, pressed: true } => {
+            if pressed_mouse_buttons.insert(*button) {
+                Some(crate::net::Event::MouseButton { button: *button, pressed: true })
+            } else {
+                None
+            }
+        }
+        InputEvent::MouseButton { button, pressed: false } => {
+            pressed_mouse_buttons.remove(button);
+            Some(crate::net::Event::MouseButton { button: *button, pressed: false })
+        }
         InputEvent::HotkeyToggled { .. } | InputEvent::BackendError(_) => None,
     }
 }
