@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use argon2::{Argon2, PasswordHasher};
 use argon2::password_hash::{PasswordHash, SaltString, rand_core::OsRng};
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 
 use crate::icons;
 
@@ -220,7 +219,6 @@ impl Config {
     }
 }
 
-/// Load the known-servers trust store.
 pub fn load_known_servers() -> HashMap<String, String> {
     let path = known_servers_path();
     match std::fs::read_to_string(&path) {
@@ -233,7 +231,6 @@ pub fn load_known_servers() -> HashMap<String, String> {
     }
 }
 
-/// Save the known-servers trust store.
 pub fn save_known_servers(known: &HashMap<String, String>) {
     let path = known_servers_path();
     if let Some(parent) = path.parent() {
@@ -252,22 +249,6 @@ pub fn save_known_servers(known: &HashMap<String, String>) {
     }
 }
 
-/// Check if a server's fingerprint is trusted.
-pub fn is_trusted(host: &str, port: u16, fingerprint: &[u8; 32]) -> bool {
-    let known = load_known_servers();
-    let key = format!("{host}:{port}");
-    if let Some(stored) = known.get(&key) {
-        if let Ok(stored_bytes) = hex::decode(stored) {
-            if stored_bytes.len() == 32 {
-                let stored_array: [u8; 32] = stored_bytes.try_into().unwrap();
-                return fingerprint.as_slice().ct_eq(stored_array.as_slice()).into();
-            }
-        }
-    }
-    false
-}
-
-/// Trust a server's fingerprint.
 pub fn trust_server(host: &str, port: u16, fingerprint: [u8; 32]) {
     let mut known = load_known_servers();
     let key = format!("{host}:{port}");

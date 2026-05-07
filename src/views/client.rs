@@ -409,10 +409,6 @@ impl State {
         std::time::Duration::from_secs(u64::from(self.reconnect_timeout_secs.parse::<u16>().unwrap_or(30)))
     }
 
-    pub fn capture_mode(&self) -> CaptureMode {
-        self.capture_mode
-    }
-
     pub fn is_grabbed(&self) -> bool {
         self.grabbed
     }
@@ -439,10 +435,6 @@ impl State {
 
     pub fn passphrase_hash(&self) -> &str {
         &self.passphrase_hash
-    }
-
-    pub fn require_auth(&self) -> bool {
-        self.require_auth
     }
 
     pub fn is_reconnecting(&self) -> bool {

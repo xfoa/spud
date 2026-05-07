@@ -39,11 +39,6 @@ pub fn cert_fingerprint(cert: &CertificateDer<'_>) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Format a fingerprint as a hex string for display.
-pub fn format_fingerprint(fingerprint: &[u8; 32]) -> String {
-    hex::encode(fingerprint)
-}
-
 /// Load certificate and key from disk, or generate and persist new ones.
 pub fn load_or_generate_certs() -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>), Box<dyn std::error::Error>> {
     let cert_path = cert_file_path();

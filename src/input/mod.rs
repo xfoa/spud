@@ -14,6 +14,8 @@ pub enum InputEvent {
     KeyRelease { keycode: u8 },
     MouseMove { dx: i16, dy: i16 },
     MouseButton { button: u8, pressed: bool },
+    // Can remove allow when input for other platforms is implemented
+    #[allow(unused)]
     BackendError(String),
 }
 
