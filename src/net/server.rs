@@ -51,6 +51,12 @@ impl ServerListener {
 impl Drop for ServerListener {
     fn drop(&mut self) {
         self.shutdown.notify_waiters();
+        for _i in 1..100 {
+            if self.handle.is_finished() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         self.handle.abort();
     }
 }
