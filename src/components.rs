@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use iced::widget::text::Wrapping;
 use iced::widget::tooltip;
-use iced::widget::{button, column, container, image, mouse_area, row, stack, text, Space};
+use iced::widget::{button, column, container, image, mouse_area, row, stack, text, Column, Space};
 use iced::{font, Background, Border, Color, Element, Font, Length, Padding, Shadow, Vector};
 
 use crate::theme as mt;
@@ -333,7 +333,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
         .center_x(Length::Fill)
         .center_y(Length::Fill);
 
-    let mut badge_column = column![]
+    let mut badge_column: Column<'_, Message> = column![]
         .padding(10)
         .spacing(4);
     if encrypt {
@@ -428,7 +428,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
             row![
                 container(text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::SUCCESS))
                     .center(12),
-                text("Encrypted").size(11).color(mt::SUCCESS),
+                text("Encryption enabled").size(11).color(mt::SUCCESS),
             ]
             .spacing(4)
             .into(),

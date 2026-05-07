@@ -440,6 +440,10 @@ impl State {
         &self.hotkey
     }
 
+    pub fn require_auth(&self) -> bool {
+        self.require_auth
+    }
+
     pub fn connection_passphrase(&self) -> Option<&str> {
         if self.require_auth {
             Some(self.passphrase.as_str()).filter(|p| !p.is_empty())
@@ -911,7 +915,7 @@ impl State {
         let auth_card = ui::card(
             row![
                 column![
-                    text("Require authentication").size(16).color(mt::ON_SURFACE),
+                    text("Use passphrase").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
                     ui::helper_text("Send a passphrase when connecting to the server."),
                 ]

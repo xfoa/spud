@@ -1,4 +1,4 @@
-use iced::widget::{checkbox, column, row, slider, text, text_input};
+use iced::widget::{checkbox, column, row, slider, text, text_input, Row};
 use iced::{Element, Length};
 
 use crate::components as ui;
@@ -325,14 +325,28 @@ impl State {
             .as_ref()
             .map_or(self.require_auth, |c| c.require_auth);
 
+        let active_encryption_enabled = self
+            .active_config
+            .as_ref()
+            .map_or(self.encrypt_udp, |c| c.encrypt_udp);
+
         let (status_label, status_color, lock_icon) = if self.running {
-            if active_require_auth {
-                ("Listening", mt::SUCCESS, icons::LOCK)
+            let running_label = String::from("Listening");
+            if active_require_auth && active_encryption_enabled {
+                (running_label, mt::SUCCESS, Some(icons::LOCK))
             } else {
-                ("Listening (insecure)", mt::DANGER, icons::TRIANGLE_EXCLAMATION)
+                let mut disabled_features = vec![];
+                    if !active_encryption_enabled {
+                    disabled_features.push("encryption disabled");
+                }
+                if !active_require_auth {
+                    disabled_features.push("no passphrase required");
+                }
+                let warning_label = String::from(running_label) + " (" + &disabled_features.join(", ") + ")";
+                (warning_label, mt::DANGER, Some(icons::TRIANGLE_EXCLAMATION))
             }
         } else {
-            ("Stopped", mt::ON_SURFACE_VARIANT, icons::TRIANGLE_EXCLAMATION)
+            (String::from("Stopped"), mt::ON_SURFACE_VARIANT, None)
         };
 
         let passphrase_missing = self.require_auth && self.passphrase.is_empty() && self.passphrase_hash.is_empty();
@@ -348,23 +362,19 @@ impl State {
             |c| format!("{}:{}", c.bind_address, c.port),
         );
 
-        let status_row: Element<Message> = if self.running {
+        let mut status_row: Row<Message> =
             row![
-                text("Status:").size(14).color(mt::ON_SURFACE_VARIANT),
-                text(lock_icon).font(icons::FA_SOLID).size(13).color(status_color),
-                text(status_label).size(14).color(status_color),
+                text("Status:").size(14).color(mt::ON_SURFACE_VARIANT)
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center)
-            .into()
-        } else {
-            row![
-                text("Status:").size(14).color(mt::ON_SURFACE_VARIANT),
-                text(status_label).size(14).color(status_color),
-            ]
-            .spacing(8)
-            .into()
-        };
+            .into();
+
+        if let Some(icon) = lock_icon { 
+            status_row = status_row.push(text(icon).font(icons::FA_SOLID).size(13).color(status_color));
+        }
+
+        status_row = status_row.push(text(status_label).size(14).color(status_color));
 
         let action_row: Element<Message> = if self.settings_changed() {
             row![
@@ -380,7 +390,7 @@ impl State {
             row![ui::h_space_fill(), action].width(Length::Fill).into()
         };
 
-        let mut col_items: Vec<Element<Message>> = vec![status_row];
+        let mut col_items: Vec<Element<Message>> = vec![status_row.into()];
 
         if self.running {
             col_items.push(ui::v_space(8.0).into());
@@ -546,7 +556,7 @@ impl State {
         let auth_card = ui::card(
             row![
                 column![
-                    text("Require authentication").size(16).color(mt::ON_SURFACE),
+                    text("Require passphrase").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
                     ui::helper_text(
                         "Clients must present a passphrase before sending input."

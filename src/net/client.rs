@@ -112,6 +112,7 @@ impl ClientConnection {
         host: &str,
         port: u16,
         client_encrypt: bool,
+        client_require_auth: bool,
         passphrase: Option<String>,
         saved_phc: Option<String>,
     ) -> io::Result<(Self, Option<String>)> {
@@ -198,7 +199,7 @@ impl ClientConnection {
         };
 
         let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, phc_to_save) =
-            Self::handshake(tls, addr, passphrase, saved_phc).await?;
+            Self::handshake(tls, addr, client_require_auth, passphrase, saved_phc).await?;
         if client_encrypt != server_encrypt {
             return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
                 "This server doesn't use encryption, disable it in Security to connect"
@@ -298,6 +299,7 @@ impl ClientConnection {
     async fn handshake(
         tls: TlsStream<TcpStream>,
         server_addr: SocketAddr,
+        client_require_auth: bool,
         passphrase: Option<String>,
         saved_phc: Option<String>,
     ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>)> {
@@ -317,6 +319,12 @@ impl ClientConnection {
 
         // Handle auth challenge if present
         if let ControlMsg::AuthChallenge { nonce, salt } = msg {
+            if !client_require_auth {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Server requires authentication but it is disabled on this client",
+                ));
+            }
             let hmac = match saved_phc {
                 Some(ref phc) => match crate::net::auth::client_compute_response_from_phc(phc, &salt, &nonce) {
                     Some(hmac) => {
@@ -368,10 +376,21 @@ impl ClientConnection {
             }
         }
 
-        let (conn_id, server_encrypt, key_timeout_ms) = match msg {
-            ControlMsg::SessionInit { conn_id, encrypt, key_timeout_ms, .. } => (conn_id, encrypt, key_timeout_ms),
+        let (conn_id, server_encrypt, server_auth, key_timeout_ms) = match msg {
+            ControlMsg::SessionInit { conn_id, encrypt, auth, key_timeout_ms, .. } => (conn_id, encrypt, auth, key_timeout_ms),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Connect failed: expected SessionInit")),
         };
+
+        if client_require_auth != server_auth {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                if client_require_auth {
+                    "Server does not require a passphrase, disable it in Security to connect"
+                } else {
+                    "Server requires a passphrase, enable it in Security to connect"
+                },
+            ));
+        }
 
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
         udp.connect(server_addr).await?;

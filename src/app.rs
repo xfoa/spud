@@ -38,6 +38,7 @@ fn build_wayland_hotkey_stream(
 async fn reconnect(
     host: String,
     port: u16,
+    client_require_auth: bool,
     passphrase: Option<String>,
     saved_phc: Option<String>,
     client_encrypt: bool,
@@ -45,7 +46,7 @@ async fn reconnect(
 ) -> Result<(crate::net::Sender, Option<String>), ()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        match crate::net::Sender::connect(&host, port, client_encrypt, passphrase.clone(), saved_phc.clone()).await {
+        match crate::net::Sender::connect(&host, port, client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone()).await {
             Ok(result) => return Ok(result),
             Err(_) => {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -167,13 +168,18 @@ impl Spud {
                 if is_connect {
                     let host = self.client.host().to_string();
                     let port = self.client.port().parse().unwrap_or(7878);
+                    let client_require_auth = self.client.require_auth();
                     let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
-                    let saved_phc = self.client.passphrase_hash().to_string();
-                    let saved_phc = if saved_phc.is_empty() { None } else { Some(saved_phc) };
+                    let saved_phc = if client_require_auth {
+                        let phc = self.client.passphrase_hash().to_string();
+                        if phc.is_empty() { None } else { Some(phc) }
+                    } else {
+                        None
+                    };
                     let client_encrypt = self.client.encrypt_udp();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host, port, client_encrypt, passphrase, saved_phc).await
+                            crate::net::Sender::connect(&host, port, client_encrypt, client_require_auth, passphrase, saved_phc).await
                         },
                         |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
@@ -186,14 +192,20 @@ impl Spud {
                     let port = self.client.port().parse().unwrap_or(7878);
                     let gen = self.client.reconnect_generation();
                     let timeout = self.client.reconnect_timeout();
+                    let client_require_auth = self.client.require_auth();
                     let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
-                    let saved_phc = self.client.passphrase_hash().to_string();
-                    let saved_phc = if saved_phc.is_empty() { None } else { Some(saved_phc) };
+                    let saved_phc = if client_require_auth {
+                        let phc = self.client.passphrase_hash().to_string();
+                        if phc.is_empty() { None } else { Some(phc) }
+                    } else {
+                        None
+                    };
                     let client_encrypt = self.client.encrypt_udp();
                     return Task::perform(
                         reconnect(
                             host,
                             port,
+                            client_require_auth,
                             passphrase,
                             saved_phc,
                             client_encrypt,
