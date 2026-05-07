@@ -14,7 +14,7 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::cert::{cert_fingerprint, FingerprintVerifier};
+use crate::cert::cert_fingerprint;
 use crate::config;
 use crate::net::push_event;
 use crate::net::Event;

@@ -8,7 +8,6 @@ use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
 use iced::futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
-use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
@@ -52,6 +51,7 @@ impl ServerListener {
 impl Drop for ServerListener {
     fn drop(&mut self) {
         self.shutdown.notify_waiters();
+        self.handle.abort();
     }
 }
 

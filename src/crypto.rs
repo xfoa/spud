@@ -1,5 +1,5 @@
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, AeadCore, Payload};
+use aes_gcm::{Aes256Gcm, Nonce};
 use hkdf::Hkdf;
 use rand_core::OsRng;
 use sha2::Sha256;
