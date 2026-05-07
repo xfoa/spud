@@ -912,7 +912,7 @@ impl State {
     }
 
     fn security_page(&self) -> Element<'_, Message> {
-        let auth_card = ui::card(
+        let mut auth_items: Vec<Element<Message>> = vec![
             row![
                 column![
                     text("Use passphrase").size(16).color(mt::ON_SURFACE),
@@ -929,14 +929,16 @@ impl State {
                     }
                 }
             ]
-            .align_y(iced::Alignment::Center),
-        );
+            .align_y(iced::Alignment::Center)
+            .into(),
+        ];
 
-        let mut passphrase_items: Vec<Element<Message>> = vec![
-            text("Passphrase").size(16).color(mt::ON_SURFACE).into(),
-            ui::v_space(4.0).into(),
-            ui::helper_text("Must match the passphrase set on the server.").into(),
-            ui::v_space(16.0).into(),
+        if self.require_auth {
+            auth_items.push(ui::v_space(16.0).into());
+            auth_items.push(text("Passphrase").size(16).color(mt::ON_SURFACE).into());
+            auth_items.push(ui::v_space(4.0).into());
+            auth_items.push(ui::helper_text("Must match the passphrase set on the server.").into());
+            auth_items.push(ui::v_space(16.0).into());
             {
                 let mut input = text_input("Enter passphrase", &self.pending_passphrase)
                     .secure(true)
@@ -945,53 +947,53 @@ impl State {
                 if !self.connected {
                     input = input.on_input(Message::PassphraseChanged);
                 }
-                input.into()
+                auth_items.push(input.into());
             }
-        ];
 
-        if self.pending_passphrase.is_empty() {
-            let has_passphrase = !self.passphrase.is_empty() || !self.passphrase_hash.is_empty();
-            if has_passphrase {
-                passphrase_items.push(ui::v_space(8.0).into());
-                passphrase_items.push(
-                    row![
-                        text(icons::LOCK)
-                            .font(icons::FA_SOLID)
-                            .size(11)
-                            .color(mt::SUCCESS),
-                        text("Passphrase is set.")
-                            .size(12)
-                            .color(mt::SUCCESS),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::Alignment::Center)
-                    .into(),
-                );
-            } else if self.require_auth {
-                passphrase_items.push(ui::v_space(8.0).into());
-                passphrase_items.push(
-                    row![
-                        text(icons::TRIANGLE_EXCLAMATION)
-                            .font(icons::FA_SOLID)
-                            .size(11)
-                            .color(mt::WARNING),
-                        text("A passphrase is required when authentication is enabled.")
-                            .size(12)
-                            .color(mt::WARNING),
-                    ]
-                    .spacing(6)
-                    .align_y(iced::Alignment::Center)
-                    .into(),
-                );
+            if self.pending_passphrase.is_empty() {
+                let has_passphrase = !self.passphrase.is_empty() || !self.passphrase_hash.is_empty();
+                if has_passphrase {
+                    auth_items.push(ui::v_space(8.0).into());
+                    auth_items.push(
+                        row![
+                            text(icons::LOCK)
+                                .font(icons::FA_SOLID)
+                                .size(11)
+                                .color(mt::SUCCESS),
+                            text("Passphrase is set.")
+                                .size(12)
+                                .color(mt::SUCCESS),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    );
+                } else {
+                    auth_items.push(ui::v_space(8.0).into());
+                    auth_items.push(
+                        row![
+                            text(icons::TRIANGLE_EXCLAMATION)
+                                .font(icons::FA_SOLID)
+                                .size(11)
+                                .color(mt::WARNING),
+                            text("A passphrase is required when authentication is enabled.")
+                                .size(12)
+                                .color(mt::WARNING),
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    );
+                }
             }
         }
 
-        let passphrase_card = ui::card(column(passphrase_items).spacing(0));
+        let auth_card = ui::card(column(auth_items).spacing(0));
 
         let encrypt_card = ui::card(
             row![
                 column![
-                    text("Encrypt UDP data plane").size(16).color(mt::ON_SURFACE),
+                    text("Require encryption").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
                     ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
                 ]
@@ -1008,7 +1010,7 @@ impl State {
             .align_y(iced::Alignment::Center),
         );
 
-        let body = column![auth_card, ui::v_space(16.0), passphrase_card, ui::v_space(16.0), encrypt_card].spacing(0);
+        let body = column![auth_card, ui::v_space(16.0), encrypt_card].spacing(0);
         ui::page_body("Security", body)
     }
 
