@@ -16,6 +16,7 @@ pub struct DiscoveredServer {
     pub address: String,
     pub icon: char,
     pub auth: bool,
+    pub encrypt: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,11 @@ pub fn browse() -> impl iced::futures::Stream<Item = Event> + Send + 'static {
                         .get("auth")
                         .map(|r| r.val_str() == "true")
                         .unwrap_or(false);
+                    let encrypt = info
+                        .get_properties()
+                        .get("encrypt")
+                        .map(|r| r.val_str() == "true")
+                        .unwrap_or(false);
                     let address = format!("{}:{}", host, port);
                     let _ = tx.try_send(Event::Found(DiscoveredServer {
                         fullname,
@@ -80,6 +86,7 @@ pub fn browse() -> impl iced::futures::Stream<Item = Event> + Send + 'static {
                         address,
                         icon,
                         auth,
+                        encrypt,
                     }));
                 }
                 Ok(ServiceEvent::ServiceRemoved(_, ref fullname)) => {
@@ -101,7 +108,7 @@ pub struct Registration {
 }
 
 impl Registration {
-    pub fn new(name: &str, port: u16, icon: ServerIcon, require_auth: bool) -> Option<Self> {
+    pub fn new(name: &str, port: u16, icon: ServerIcon, require_auth: bool, encrypt_udp: bool) -> Option<Self> {
         let d = daemon()?;
         let hostname = hostname::get()
             .ok()
@@ -117,6 +124,7 @@ impl Registration {
         props.insert("icon".to_string(), icon_str.to_string());
         props.insert("name".to_string(), name.to_string());
         props.insert("auth".to_string(), require_auth.to_string());
+        props.insert("encrypt".to_string(), encrypt_udp.to_string());
         let instance_name = format!("{}-{}-{}", name, port, std::process::id());
         let info = ServiceInfo::new(SERVICE_TYPE, &instance_name, &fqdn, (), port, Some(props))
             .map_err(|e| eprintln!("[spud] mDNS ServiceInfo: {e}"))

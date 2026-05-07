@@ -288,6 +288,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     name: &'a str,
     address: &'a str,
     auth: bool,
+    encrypt: bool,
     selected: bool,
     on_press: Option<Message>,
 ) -> Element<'a, Message> {
@@ -304,36 +305,9 @@ pub fn server_tile<'a, Message: 'a + Clone>(
         .center_y(Length::Fill)
         .width(Length::Fixed(44.0))
         .height(Length::Fixed(44.0));
-    let icon_widget: Element<'a, Message> = if auth {
-        stack![
-            icon_container,
-            container(
-                container(text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(9).color(mt::SURFACE))
-                    .padding(2)
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(mt::WARNING)),
-                        border: Border {
-                            color: mt::WARNING,
-                            width: 1.0,
-                            radius: 10.0.into(),
-                        },
-                        ..Default::default()
-                    })
-            )
-            .align_x(iced::Alignment::End)
-            .align_y(iced::Alignment::End)
-            .width(Length::Fixed(44.0))
-            .height(Length::Fixed(44.0)),
-        ]
-        .width(Length::Fixed(44.0))
-        .height(Length::Fixed(44.0))
-        .into()
-    } else {
-        icon_container.into()
-    };
 
     let content = column![
-        icon_widget,
+        icon_container,
         v_space(10.0),
         text(name_display)
             .size(14)
@@ -359,7 +333,52 @@ pub fn server_tile<'a, Message: 'a + Clone>(
         .center_x(Length::Fill)
         .center_y(Length::Fill);
 
-    let mut btn = button(inner)
+    let mut badge_column = column![]
+        .padding(10)
+        .spacing(6);
+    if encrypt {
+        badge_column = badge_column.push(
+            container(
+                container(text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(9).color(mt::SURFACE))
+                    .padding(3)
+                    .center(16)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(mt::SUCCESS)),
+                        border: Border {
+                            color: mt::SUCCESS,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    })
+            )
+        );
+    }
+    if auth {
+        badge_column = badge_column.push(
+            container(
+                container(text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(9).color(mt::SURFACE))
+                    .padding(3)
+                    .center(16)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(mt::WARNING)),
+                        border: Border {
+                            color: mt::WARNING,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    })
+            )
+        );
+    }
+    let badge_stack = stack![inner, badge_column];
+    let icon_widget: Element<'a, Message> = badge_stack
+        .width(Length::Fixed(44.0))
+        .height(Length::Fixed(44.0))
+        .into();
+
+    let mut btn = button(icon_widget)
         .padding(0)
         .width(Length::Fixed(150.0))
         .height(Length::Fixed(130.0))
@@ -393,7 +412,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if let Some(msg) = on_press {
         btn = btn.on_press(msg);
     }
-    if !any_truncated && !auth {
+    if !any_truncated && !auth && !encrypt {
         return btn.into();
     }
 
@@ -404,10 +423,20 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if address_truncated {
         tip_items.push(text(address.to_string()).size(11).color(mt::ON_SURFACE_VARIANT).into());
     }
+    if encrypt {
+        tip_items.push(
+            row![
+                text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::SUCCESS),
+                text("Encrypted").size(11).color(mt::SUCCESS),
+            ]
+            .spacing(4)
+            .into(),
+        );
+    }
     if auth {
         tip_items.push(
             row![
-                text(crate::icons::LOCK).font(crate::icons::FA_SOLID).size(11).color(mt::WARNING),
+                text(crate::icons::KEY).font(crate::icons::FA_SOLID).size(11).color(mt::WARNING),
                 text("Passphrase required").size(11).color(mt::WARNING),
             ]
             .spacing(4)

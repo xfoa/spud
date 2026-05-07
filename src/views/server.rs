@@ -166,7 +166,7 @@ impl State {
         self.registration = None;
         if self.running && self.discoverable {
             let port = self.port.parse::<u16>().unwrap_or(7878);
-            self.registration = crate::discovery::Registration::new(&self.name, port, self.icon, self.require_auth);
+            self.registration = crate::discovery::Registration::new(&self.name, port, self.icon, self.require_auth, self.encrypt_udp);
         }
     }
 

@@ -689,6 +689,7 @@ impl State {
                         s.name.as_str(),
                         s.address.as_str(),
                         s.auth,
+                        s.encrypt,
                         selected,
                         on_press,
                     )
