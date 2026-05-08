@@ -1,7 +1,12 @@
 #[cfg(target_os = "linux")]
+mod inject;
+#[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
 mod x11;
+
+#[cfg(target_os = "linux")]
+pub use inject::InputInjector;
 
 use iced::futures::stream::BoxStream;
 #[cfg(not(target_os = "linux"))]

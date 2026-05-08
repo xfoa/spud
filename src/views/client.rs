@@ -1066,16 +1066,18 @@ fn iced_to_wire(
     use iced::mouse;
 
     match event {
-        iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-            let name = key_to_string(key);
+        iced::Event::Keyboard(keyboard::Event::KeyPressed { key, physical_key, .. }) => {
+            let name = physical_key_to_name(physical_key)
+                .unwrap_or_else(|| key_to_string(key));
             if pressed_keys.insert(name.clone()) {
                 Some(crate::net::Event::KeyDown(name))
             } else {
                 None
             }
         }
-        iced::Event::Keyboard(keyboard::Event::KeyReleased { key, .. }) => {
-            let name = key_to_string(key);
+        iced::Event::Keyboard(keyboard::Event::KeyReleased { key, physical_key, .. }) => {
+            let name = physical_key_to_name(physical_key)
+                .unwrap_or_else(|| key_to_string(key));
             pressed_keys.remove(&name);
             Some(crate::net::Event::KeyUp(name))
         }
@@ -1127,7 +1129,9 @@ fn input_event_to_wire(
     use crate::input::InputEvent;
     match event {
         InputEvent::KeyPress { keycode } => {
-            let name = format!("evdev:{keycode}");
+            // X11 keycodes are offset by 8 from Linux evdev scancodes.
+            let evdev = keycode.saturating_sub(8);
+            let name = format!("evdev:{evdev}");
             if pressed_keys.insert(name.clone()) {
                 Some(crate::net::Event::KeyDown(name))
             } else {
@@ -1135,7 +1139,8 @@ fn input_event_to_wire(
             }
         }
         InputEvent::KeyRelease { keycode } => {
-            let name = format!("evdev:{keycode}");
+            let evdev = keycode.saturating_sub(8);
+            let name = format!("evdev:{evdev}");
             pressed_keys.remove(&name);
             Some(crate::net::Event::KeyUp(name))
         }
@@ -1164,6 +1169,167 @@ fn key_to_string(key: &Key) -> String {
         Key::Named(n) => format!("{n:?}"),
         Key::Unidentified => "Unidentified".to_string(),
     }
+}
+
+/// Convert a physical key to an evdev key name (`evdev:N`).
+///
+/// On Linux this uses the raw scancode so the mapping is layout-independent
+/// and distinguishes left/right modifiers.
+fn physical_key_to_name(physical: &iced::keyboard::key::Physical) -> Option<String> {
+    use iced::keyboard::key::{NativeCode, Physical};
+    let code = match physical {
+        Physical::Code(code) => code_to_evdev(code)?,
+        Physical::Unidentified(NativeCode::Xkb(k)) => *k as u16,
+        _ => return None,
+    };
+    Some(format!("evdev:{code}"))
+}
+
+/// Map an iced `Code` to a Linux evdev scancode.
+///
+/// This table is the inverse of winit's `scancode_to_physicalkey` mapping.
+fn code_to_evdev(code: &iced::keyboard::key::Code) -> Option<u16> {
+    use iced::keyboard::key::Code;
+    let scancode = match code {
+        Code::Backquote => 41,
+        Code::Backslash => 43,
+        Code::BracketLeft => 26,
+        Code::BracketRight => 27,
+        Code::Comma => 51,
+        Code::Digit0 => 11,
+        Code::Digit1 => 2,
+        Code::Digit2 => 3,
+        Code::Digit3 => 4,
+        Code::Digit4 => 5,
+        Code::Digit5 => 6,
+        Code::Digit6 => 7,
+        Code::Digit7 => 8,
+        Code::Digit8 => 9,
+        Code::Digit9 => 10,
+        Code::Equal => 13,
+        Code::IntlBackslash => 86,
+        Code::IntlRo => 89,
+        Code::IntlYen => 124,
+        Code::KeyA => 30,
+        Code::KeyB => 48,
+        Code::KeyC => 46,
+        Code::KeyD => 32,
+        Code::KeyE => 18,
+        Code::KeyF => 33,
+        Code::KeyG => 34,
+        Code::KeyH => 35,
+        Code::KeyI => 23,
+        Code::KeyJ => 36,
+        Code::KeyK => 37,
+        Code::KeyL => 38,
+        Code::KeyM => 50,
+        Code::KeyN => 49,
+        Code::KeyO => 24,
+        Code::KeyP => 25,
+        Code::KeyQ => 16,
+        Code::KeyR => 19,
+        Code::KeyS => 31,
+        Code::KeyT => 20,
+        Code::KeyU => 22,
+        Code::KeyV => 47,
+        Code::KeyW => 17,
+        Code::KeyX => 45,
+        Code::KeyY => 21,
+        Code::KeyZ => 44,
+        Code::Minus => 12,
+        Code::Period => 52,
+        Code::Quote => 40,
+        Code::Semicolon => 39,
+        Code::Slash => 53,
+        Code::AltLeft => 56,
+        Code::AltRight => 100,
+        Code::Backspace => 14,
+        Code::CapsLock => 58,
+        Code::ContextMenu => 127,
+        Code::ControlLeft => 29,
+        Code::ControlRight => 97,
+        Code::Enter => 28,
+        Code::SuperLeft => 125,
+        Code::SuperRight => 126,
+        Code::ShiftLeft => 42,
+        Code::ShiftRight => 54,
+        Code::Space => 57,
+        Code::Tab => 15,
+        Code::Convert => 92,
+        Code::KanaMode => 93,
+        Code::Lang1 => 122,
+        Code::Lang2 => 123,
+        Code::Lang3 => 90,
+        Code::Lang4 => 91,
+        Code::Lang5 => 85,
+        Code::NonConvert => 94,
+        Code::Delete => 111,
+        Code::End => 107,
+        Code::Help => 138,
+        Code::Home => 102,
+        Code::Insert => 110,
+        Code::PageDown => 109,
+        Code::PageUp => 104,
+        Code::ArrowDown => 108,
+        Code::ArrowLeft => 105,
+        Code::ArrowRight => 106,
+        Code::ArrowUp => 103,
+        Code::NumLock => 69,
+        Code::Numpad0 => 82,
+        Code::Numpad1 => 79,
+        Code::Numpad2 => 80,
+        Code::Numpad3 => 81,
+        Code::Numpad4 => 75,
+        Code::Numpad5 => 76,
+        Code::Numpad6 => 77,
+        Code::Numpad7 => 71,
+        Code::Numpad8 => 72,
+        Code::Numpad9 => 73,
+        Code::NumpadAdd => 78,
+        Code::NumpadComma => 121,
+        Code::NumpadDecimal => 83,
+        Code::NumpadDivide => 98,
+        Code::NumpadEnter => 96,
+        Code::NumpadEqual => 117,
+        Code::NumpadMultiply => 55,
+        Code::NumpadSubtract => 74,
+        Code::Pause => 119,
+        Code::PrintScreen => 99,
+        Code::ScrollLock => 70,
+        Code::F1 => 59,
+        Code::F2 => 60,
+        Code::F3 => 61,
+        Code::F4 => 62,
+        Code::F5 => 63,
+        Code::F6 => 64,
+        Code::F7 => 65,
+        Code::F8 => 66,
+        Code::F9 => 67,
+        Code::F10 => 68,
+        Code::F11 => 87,
+        Code::F12 => 88,
+        Code::F13 => 183,
+        Code::F14 => 184,
+        Code::F15 => 185,
+        Code::F16 => 186,
+        Code::F17 => 187,
+        Code::F18 => 188,
+        Code::F19 => 189,
+        Code::F20 => 190,
+        Code::F21 => 191,
+        Code::F22 => 192,
+        Code::F23 => 193,
+        Code::F24 => 194,
+        Code::AudioVolumeDown => 114,
+        Code::AudioVolumeMute => 113,
+        Code::AudioVolumeUp => 115,
+        Code::MediaPlayPause => 164,
+        Code::MediaStop => 166,
+        Code::MediaTrackNext => 163,
+        Code::MediaTrackPrevious => 165,
+        _ => return None,
+    };
+    Some(scancode)
 }
 
 fn map_iced_button(b: &iced::mouse::Button) -> u8 {

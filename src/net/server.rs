@@ -12,6 +12,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
+use crate::input::InputInjector;
 use crate::net::protocol::ControlMsg;
 use crate::net::tls::build_server_config;
 use crate::session::{generate_session, SessionState, SessionTable};
@@ -61,6 +63,27 @@ impl Drop for ServerListener {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn get_input_injector() -> Option<InputInjector> {
+    match crate::input::InputInjector::new() {
+        Ok(inj) => Some(inj),
+        Err(e) => {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                eprintln!("[spud] Permission denied opening /dev/uinput.");
+                eprintln!("[spud] Fix: create a udev rule so the 'input' group can access it:");
+                eprintln!("[spud]   echo 'KERNEL=\"uinput\", MODE=\"0660\", GROUP=\"input\"' \\");
+                eprintln!("[spud]     | sudo tee /etc/udev/rules.d/99-uinput.rules");
+                eprintln!("[spud]   sudo udevadm control --reload-rules");
+                eprintln!("[spud]   sudo udevadm trigger");
+            } else {
+                eprintln!("[spud] Failed to create input injector: {e}");
+            }
+            eprintln!("[spud] Input events will be logged only, not injected.");
+            None
+        }
+    }
+}
+
 async fn run_server(
     tcp: TcpListener,
     udp: UdpSocket,
@@ -72,6 +95,9 @@ async fn run_server(
     key_timeout_ms: u16,
     sessions: Arc<SessionTable>,
 ) {
+    #[cfg(target_os = "linux")]
+    let mut injector = get_input_injector();
+
     let cancel = CancellationToken::new();
     let mut buf = vec![0u8; 2048];
     let mut sweep_interval = tokio::time::interval(Duration::from_millis(200));
@@ -96,8 +122,15 @@ async fn run_server(
             }
             _ = sweep_interval.tick() => {
                 for mut session in sessions.iter_mut() {
-                    for action in session.tracker.sweep() {
+                    let actions = session.tracker.sweep();
+                    for action in &actions {
                         println!("[server] (timeout): {action}");
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let Some(ref mut inj) = injector {
+                        for action in &actions {
+                            inj.inject_action(action);
+                        }
                     }
                 }
             }
@@ -144,8 +177,23 @@ async fn run_server(
                                     if actions.is_empty() {
                                         println!("[server] {src}: {event:?}");
                                     } else {
-                                        for action in actions {
+                                        for action in &actions {
                                             println!("[server] {src}: {action}");
+                                        }
+                                    }
+                                    #[cfg(target_os = "linux")]
+                                    if let Some(ref mut inj) = injector {
+                                        for action in &actions {
+                                            inj.inject_action(action);
+                                        }
+                                        match &event {
+                                            crate::net::Event::MouseMove { dx, dy } => {
+                                                let _ = inj.mouse_move(i32::from(*dx), i32::from(*dy));
+                                            }
+                                            crate::net::Event::Wheel { dx, dy } => {
+                                                let _ = inj.wheel(*dx, *dy);
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
