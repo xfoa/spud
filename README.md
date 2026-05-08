@@ -23,6 +23,7 @@ There already exist tools that solve similar problems to Spud, so why not use th
 * Cross-platform
 * Low latency input streaming
 * Input capture toggling by hotkey or window focus
+* Screen blanking on input capture
 * Tolerance of poor network conditions
 * Local screen blanking on client while capturing input
 * Optional password protection and encryption
