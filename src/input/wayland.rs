@@ -320,20 +320,15 @@ fn emit_axis_buttons(state: &mut State, horizontal: bool) {
     while value_ref.abs() >= STEP {
         let positive = *value_ref > 0.0;
         *value_ref -= if positive { STEP } else { -STEP };
-        let button = match (horizontal, positive) {
-            (false, false) => 4,
-            (false, true) => 5,
-            (true, false) => 6,
-            (true, true) => 7,
+        let (dx, dy) = match (horizontal, positive) {
+            // Wayland vertical: positive = down (match iced convention)
+            (false, true) => (0, 1),
+            (false, false) => (0, -1),
+            // Wayland horizontal: positive = right (match iced convention)
+            (true, true) => (1, 0),
+            (true, false) => (-1, 0),
         };
-        let _ = state.output.try_send(InputEvent::MouseButton {
-            button,
-            pressed: true,
-        });
-        let _ = state.output.try_send(InputEvent::MouseButton {
-            button,
-            pressed: false,
-        });
+        let _ = state.output.try_send(InputEvent::Wheel { dx, dy });
     }
 }
 

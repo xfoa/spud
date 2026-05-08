@@ -1148,6 +1148,7 @@ fn input_event_to_wire(
             dx: *dx,
             dy: *dy,
         }),
+        InputEvent::Wheel { dx, dy } => Some(crate::net::Event::Wheel { dx: *dx, dy: *dy }),
         InputEvent::MouseButton { button, pressed: true } => {
             if pressed_mouse_buttons.insert(*button) {
                 Some(crate::net::Event::MouseButton { button: *button, pressed: true })

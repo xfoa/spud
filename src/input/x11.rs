@@ -164,17 +164,28 @@ fn run(hotkey: &str, mut output: mpsc::Sender<InputEvent>) -> Result<(), Box<dyn
                     }
                 }
                 Event::ButtonPress(bp) if grabbed => {
-                    if output
-                        .try_send(InputEvent::MouseButton {
-                            button: bp.detail,
+                    let event = match bp.detail {
+                        4 => Some(InputEvent::Wheel { dx: 0, dy: -1 }),
+                        5 => Some(InputEvent::Wheel { dx: 0, dy: 1 }),
+                        6 => Some(InputEvent::Wheel { dx: -1, dy: 0 }),
+                        7 => Some(InputEvent::Wheel { dx: 1, dy: 0 }),
+                        b => Some(InputEvent::MouseButton {
+                            button: b,
                             pressed: true,
-                        })
-                        .is_err()
-                    {
-                        break;
+                        }),
+                    };
+                    if let Some(ev) = event {
+                        if output.try_send(ev).is_err() {
+                            break;
+                        }
                     }
                 }
                 Event::ButtonRelease(br) if grabbed => {
+                    // Scroll wheel buttons (4-7) are handled as Wheel events
+                    // on press; ignore their release.
+                    if br.detail >= 4 && br.detail <= 7 {
+                        continue;
+                    }
                     if output
                         .try_send(InputEvent::MouseButton {
                             button: br.detail,

@@ -19,6 +19,7 @@ pub enum InputEvent {
     KeyRelease { keycode: u8 },
     MouseMove { dx: i16, dy: i16 },
     MouseButton { button: u8, pressed: bool },
+    Wheel { dx: i8, dy: i8 },
     // Can remove linter allow when input for other platforms is implemented
     #[allow(unused)]
     BackendError(String),

@@ -62,13 +62,17 @@ impl InputInjector {
     }
 
     /// Inject scroll wheel events.
+    ///
+    /// Sign convention: `dy > 0` = scroll down, `dx > 0` = scroll right.
+    /// evdev REL_WHEEL uses the opposite convention for vertical (positive = up),
+    /// so `dy` is negated. REL_HWHEEL matches our convention (positive = right).
     pub fn wheel(&mut self, dx: i8, dy: i8) -> io::Result<()> {
         let mut events = Vec::new();
         if dy != 0 {
             events.push(InputEvent::new_now(
                 EventType::RELATIVE.0,
                 RelativeAxisCode::REL_WHEEL.0,
-                i32::from(dy),
+                -i32::from(dy),
             ));
         }
         if dx != 0 {
