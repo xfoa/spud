@@ -345,7 +345,26 @@ fn map_button(button: u32) -> u8 {
 
 wayland_client::delegate_noop!(State: ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(State: ignore zwp_pointer_constraints_v1::ZwpPointerConstraintsV1);
-wayland_client::delegate_noop!(State: ignore zwp_locked_pointer_v1::ZwpLockedPointerV1);
+impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
+        event: <zwp_locked_pointer_v1::ZwpLockedPointerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => {
+                eprintln!("[spud] wayland: pointer lock active");
+            }
+            zwp_locked_pointer_v1::Event::Unlocked => {
+                eprintln!("[spud] wayland: pointer lock denied/unlocked");
+            }
+            _ => {}
+        }
+    }
+}
 wayland_client::delegate_noop!(State: ignore zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1);

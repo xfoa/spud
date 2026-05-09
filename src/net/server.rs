@@ -183,17 +183,20 @@ async fn run_server(
                                     }
                                     #[cfg(target_os = "linux")]
                                     if let Some(ref mut inj) = injector {
-                                        for action in &actions {
-                                            inj.inject_action(action);
-                                        }
-                                        match &event {
-                                            crate::net::Event::MouseMove { dx, dy } => {
-                                                let _ = inj.mouse_move(i32::from(*dx), i32::from(*dy));
+                                        let is_localhost = src.ip().is_loopback();
+                                        if !is_localhost {
+                                            for action in &actions {
+                                                inj.inject_action(action);
                                             }
-                                            crate::net::Event::Wheel { dx, dy } => {
-                                                let _ = inj.wheel(*dx, *dy);
+                                            match &event {
+                                                crate::net::Event::MouseMove { dx, dy } => {
+                                                    let _ = inj.mouse_move(i32::from(*dx), i32::from(*dy));
+                                                }
+                                                crate::net::Event::Wheel { dx, dy } => {
+                                                    let _ = inj.wheel(*dx, *dy);
+                                                }
+                                                _ => {}
                                             }
-                                            _ => {}
                                         }
                                     }
                                 }
