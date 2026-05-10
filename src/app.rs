@@ -68,6 +68,7 @@ pub enum Message {
     WindowOpened(iced::window::Id),
     WaylandHandlesReady(Option<WaylandHandles>),
     Quit,
+    NoOp,
 }
 
 pub struct Spud {
@@ -113,17 +114,20 @@ impl Spud {
             return Task::none();
         };
         let should_be_fullscreen =
-            self.mode == Mode::Client && self.client.is_blank_screen_active();
+            self.mode == Mode::Client
+                && self.client.capture_mode() == crate::config::CaptureMode::Fullscreen
+                && self.client.is_blank_screen_active();
         if should_be_fullscreen == self.blank_screen_fullscreen {
             return Task::none();
-        }
-        self.blank_screen_fullscreen = should_be_fullscreen;
-        let mode = if should_be_fullscreen {
-            iced::window::Mode::Fullscreen
         } else {
-            iced::window::Mode::Windowed
-        };
-        iced::window::set_mode(id, mode)
+            self.blank_screen_fullscreen = should_be_fullscreen;
+            let mode = if should_be_fullscreen {
+                iced::window::Mode::Fullscreen
+            } else {
+                iced::window::Mode::Windowed
+            };
+            iced::window::set_mode(id, mode)
+        }
     }
 }
 
@@ -249,13 +253,19 @@ impl Spud {
                 Task::none()
             }
             Message::Quit => {
-                let ungrabbed_hotkey = self.client.is_capturing_hotkey()
-                    && !crate::input::is_wayland_grabbed();
-                if !self.client.is_connected() || ungrabbed_hotkey {
+                let can_quit = if !self.client.is_connected() {
+                    true
+                } else if self.client.capture_mode() == crate::config::CaptureMode::Fullscreen {
+                    !crate::input::is_wayland_grabbed()
+                } else {
+                    !self.client.is_grabbed()
+                };
+                if can_quit {
                     return iced::exit();
                 }
                 Task::none()
             }
+            Message::NoOp => Task::none(),
         }
     }
 
@@ -298,11 +308,16 @@ impl Spud {
                 }
             });
             subs.push(keys);
-        } else if self.mode == Mode::Client && self.client.is_capturing_focused() {
-            let capture = iced::event::listen()
-                .map(|event| Message::Client(client::Message::Capture(event)));
+        } else if self.mode == Mode::Client && self.client.is_capturing_window() {
+            let capture = iced::event::listen_raw(|event, _status, _window| {
+                if matches!(event, iced::Event::Window(iced::window::Event::RedrawRequested(_))) {
+                    None
+                } else {
+                    Some(Message::Client(client::Message::Capture(event)))
+                }
+            });
             subs.push(capture);
-        } else if self.mode == Mode::Client && self.client.is_capturing_hotkey() {
+        } else if self.mode == Mode::Client && self.client.is_capturing_fullscreen() {
             if let Some(handles) = self.wayland_handles {
                 let keyboard = iced::event::listen().filter_map(|event| match event {
                     iced::Event::Keyboard(_) => {
@@ -411,7 +426,7 @@ impl Spud {
             window_content.into(),
         ];
 
-        if self.mode == Mode::Client && self.client.is_capturing_hotkey() && self.client.is_grabbed() {
+        if self.mode == Mode::Client && self.client.is_capturing_fullscreen() && self.client.is_grabbed() {
             let show_text = self.client.is_blank_screen_active() && self.client.show_hotkey_on_blank();
             let overlay_text: Element<Message> = if show_text {
                 text(String::new() + "Press " + self.client.hotkey_display() + " to stop capturing")
@@ -438,6 +453,37 @@ impl Spud {
                     }),
             )
             .interaction(iced::mouse::Interaction::Hidden)
+            .into();
+            layers.push(overlay);
+        }
+
+        if self.mode == Mode::Client && self.client.is_capturing_window() && self.client.is_grabbed() {
+            let show_text = self.client.show_hotkey_on_blank();
+            let overlay_text: Element<Message> = if show_text {
+                text(String::new() + "Press " + self.client.hotkey_display() + " to stop capturing")
+                    .size(24)
+                    .color(iced::Color::from_rgb(0.25, 0.25, 0.25))
+                    .into()
+            } else {
+                text("").size(1).into()
+            };
+            let overlay = mouse_area(
+                container(overlay_text)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(iced::alignment::Vertical::Center)
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(iced::Color::BLACK)),
+                        ..Default::default()
+                    }),
+            )
+            .on_press(Message::NoOp)
+            .on_double_click(Message::NoOp)
+            .on_right_press(Message::NoOp)
+            .on_middle_press(Message::NoOp)
+            .on_scroll(|_| Message::NoOp)
+            .interaction(iced::mouse::Interaction::Idle)
             .into();
             layers.push(overlay);
         }
@@ -472,7 +518,7 @@ impl Spud {
     }
 
     pub fn title(&self) -> String {
-        if self.mode == Mode::Client && self.client.is_capturing_hotkey() && self.client.is_grabbed() {
+        if self.mode == Mode::Client && self.client.is_grabbed() {
             format!("Spud - Capturing (press {} to stop)", self.client.hotkey_display())
         } else {
             "Spud".to_string()

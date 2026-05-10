@@ -44,8 +44,8 @@ impl Page {
 }
 
 const CAPTURE_MODES: [CaptureMode; 2] = [
-    CaptureMode::Hotkey,
-    CaptureMode::Focus,
+    CaptureMode::Fullscreen,
+    CaptureMode::Window,
 ];
 
 
@@ -105,7 +105,6 @@ pub struct State {
     last_error: Option<String>,
     pressed_keys: HashSet<String>,
     pressed_mouse_buttons: HashSet<u8>,
-    cursor_inside: bool,
     keyrepeat_interval_ms: u64,
     reconnecting: bool,
     reconnect_generation: u64,
@@ -147,7 +146,6 @@ impl State {
             last_error: None,
             pressed_keys: HashSet::new(),
             pressed_mouse_buttons: HashSet::new(),
-            cursor_inside: true,
             keyrepeat_interval_ms: 500, // default when not connected; set from server's key_timeout_ms on connect
             reconnecting: false,
             reconnect_generation: 0,
@@ -258,7 +256,16 @@ impl State {
             }
             Message::SensitivityChanged(v) => self.sensitivity = v,
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
-            Message::CaptureModeChanged(m) => self.capture_mode = m,
+            Message::CaptureModeChanged(m) => {
+                if self.capture_mode == CaptureMode::Fullscreen && m != CaptureMode::Fullscreen {
+                    if crate::input::is_wayland_grabbed() {
+                        crate::input::toggle_wayland_grab();
+                    }
+                }
+                self.grabbed = false;
+                self.release_all_held();
+                self.capture_mode = m;
+            }
             Message::RequireAuthToggled(v) => self.require_auth = v,
             Message::PassphraseChanged(s) => self.pending_passphrase = s,
             Message::SelectDiscovered(i) => {
@@ -302,41 +309,29 @@ impl State {
                 }
             }
             Message::Capture(event) => {
-                if let iced::Event::Mouse(iced::mouse::Event::CursorEntered) = &event {
-                    self.cursor_inside = true;
-                    return;
-                }
-                if let iced::Event::Mouse(iced::mouse::Event::CursorLeft) = &event {
-                    self.cursor_inside = false;
-                    if let Some(sender) = &self.sender {
-                        for name in &self.pressed_keys {
-                            sender.send(&crate::net::Event::KeyUp(name.clone()));
-                        }
-                        for button in &self.pressed_mouse_buttons {
-                            sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
-                        }
-                    }
-                    self.pressed_keys.clear();
-                    self.pressed_mouse_buttons.clear();
-                    return;
-                }
                 if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key,
                     modifiers,
                     ..
                 }) = &event
                 {
-                    if self.capture_mode == CaptureMode::Hotkey
-                        && format_chord(key, *modifiers).as_deref() == Some(self.hotkey.as_str())
+                    if format_chord(key, *modifiers).as_deref() == Some(self.hotkey.as_str())
                     {
-                        crate::input::toggle_wayland_grab();
-                        self.grabbed = crate::input::is_wayland_grabbed();
+                        if self.capture_mode == CaptureMode::Fullscreen {
+                            crate::input::toggle_wayland_grab();
+                            self.grabbed = crate::input::is_wayland_grabbed();
+                        } else {
+                            self.grabbed = !self.grabbed;
+                            if !self.grabbed {
+                                self.release_all_held();
+                            }
+                        }
                         return;
                     }
                 }
                 let forward = match self.capture_mode {
-                    CaptureMode::Focus => self.cursor_inside,
-                    CaptureMode::Hotkey => crate::input::is_wayland_grabbed(),
+                    CaptureMode::Window => self.grabbed,
+                    CaptureMode::Fullscreen => crate::input::is_wayland_grabbed(),
                 };
                 if forward {
                     if let Some(wire) =
@@ -352,16 +347,7 @@ impl State {
                 if let crate::input::InputEvent::HotkeyToggled { grabbed } = event {
                     self.grabbed = grabbed;
                     if !grabbed {
-                        if let Some(sender) = &self.sender {
-                            for name in &self.pressed_keys {
-                                sender.send(&crate::net::Event::KeyUp(name.clone()));
-                            }
-                            for button in &self.pressed_mouse_buttons {
-                                sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
-                            }
-                        }
-                        self.pressed_keys.clear();
-                        self.pressed_mouse_buttons.clear();
+                        self.release_all_held();
                     }
                     return;
                 }
@@ -404,12 +390,12 @@ impl State {
         self.connected
     }
 
-    pub fn is_capturing_focused(&self) -> bool {
-        self.connected && self.capture_mode == CaptureMode::Focus
+    pub fn is_capturing_window(&self) -> bool {
+        self.connected && self.capture_mode == CaptureMode::Window
     }
 
-    pub fn is_capturing_hotkey(&self) -> bool {
-        self.connected && self.capture_mode == CaptureMode::Hotkey
+    pub fn is_capturing_fullscreen(&self) -> bool {
+        self.connected && self.capture_mode == CaptureMode::Fullscreen
     }
 
     pub fn keyrepeat_interval(&self) -> std::time::Duration {
@@ -429,11 +415,28 @@ impl State {
     }
 
     pub fn is_blank_screen_active(&self) -> bool {
-        self.connected && self.capture_mode == CaptureMode::Hotkey && self.grabbed && self.blank_screen
+        self.connected && self.capture_mode == CaptureMode::Fullscreen && self.grabbed && self.blank_screen
     }
 
     pub fn show_hotkey_on_blank(&self) -> bool {
         self.show_hotkey_on_blank
+    }
+
+    pub fn capture_mode(&self) -> CaptureMode {
+        self.capture_mode
+    }
+
+    fn release_all_held(&mut self) {
+        if let Some(sender) = &self.sender {
+            for name in &self.pressed_keys {
+                sender.send(&crate::net::Event::KeyUp(name.clone()));
+            }
+            for button in &self.pressed_mouse_buttons {
+                sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
+            }
+        }
+        self.pressed_keys.clear();
+        self.pressed_mouse_buttons.clear();
     }
 
     pub fn hotkey_display(&self) -> &str {
@@ -776,26 +779,37 @@ impl State {
 
         let mut body_items: Vec<Element<Message>> = vec![capture_card.into()];
 
-        if self.capture_mode == CaptureMode::Hotkey {
-            let hotkey_card = ui::card(
-                column![
-                    text("Capture hotkey").size(16).color(mt::ON_SURFACE),
-                    ui::v_space(4.0),
-                    ui::helper_text("Press this combo to toggle input capture."),
-                    ui::v_space(16.0),
-                    row![
-                        text(&self.hotkey).size(14).color(mt::ON_SURFACE),
-                        ui::h_space_fill(),
-                        ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
-                    ]
-                    .align_y(iced::Alignment::Center),
+        let hotkey_card = ui::card(
+            column![
+                text("Capture hotkey").size(16).color(mt::ON_SURFACE),
+                ui::v_space(4.0),
+                ui::helper_text("Press this combo to toggle input capture."),
+                ui::v_space(16.0),
+                row![
+                    text(&self.hotkey).size(14).color(mt::ON_SURFACE),
+                    ui::h_space_fill(),
+                    ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
                 ]
-                .spacing(0),
-            );
+                .align_y(iced::Alignment::Center),
+            ]
+            .spacing(0),
+        );
 
+        let show_hotkey_row = row![
+            column![
+                text("Show hotkey on blank screen").size(16).color(mt::ON_SURFACE),
+                ui::v_space(2.0),
+                ui::helper_text("Display the exit combo on the black overlay."),
+            ]
+            .width(Length::Fill),
+            checkbox(self.show_hotkey_on_blank).on_toggle(Message::ShowHotkeyOnBlankToggled),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let blank_card = if self.capture_mode == CaptureMode::Fullscreen {
             let blank_screen_row = row![
                 column![
-                    text("Blank screen while captured").size(16).color(mt::ON_SURFACE),
+                    text("Blank while captured").size(16).color(mt::ON_SURFACE),
                     ui::v_space(2.0),
                     ui::helper_text("Show a black overlay while input is captured."),
                 ]
@@ -804,28 +818,19 @@ impl State {
             ]
             .align_y(iced::Alignment::Center);
 
-            let show_hotkey_row = row![
-                column![
-                    text("Show hotkey on blank screen").size(16).color(mt::ON_SURFACE),
-                    ui::v_space(2.0),
-                    ui::helper_text("Display the exit combo on the black overlay."),
-                ]
-                .width(Length::Fill),
-                checkbox(self.show_hotkey_on_blank).on_toggle(Message::ShowHotkeyOnBlankToggled),
-            ]
-            .align_y(iced::Alignment::Center);
-
-            let blank_card = if self.blank_screen {
+            if self.blank_screen {
                 ui::card(column![blank_screen_row, ui::v_space(16.0), show_hotkey_row].spacing(0))
             } else {
                 ui::card(column![blank_screen_row].spacing(0))
-            };
+            }
+        } else {
+            ui::card(column![show_hotkey_row].spacing(0))
+        };
 
-            body_items.push(ui::v_space(16.0).into());
-            body_items.push(hotkey_card.into());
-            body_items.push(ui::v_space(16.0).into());
-            body_items.push(blank_card.into());
-        }
+        body_items.push(ui::v_space(16.0).into());
+        body_items.push(hotkey_card.into());
+        body_items.push(ui::v_space(16.0).into());
+        body_items.push(blank_card.into());
 
         let body = column(body_items).spacing(0);
         ui::page_body("Capture", body)

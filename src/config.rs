@@ -44,21 +44,21 @@ impl ServerIcon {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
-    Hotkey,
-    Focus,
+    Fullscreen,
+    Window,
 }
 
 impl Default for CaptureMode {
     fn default() -> Self {
-        Self::Hotkey
+        Self::Fullscreen
     }
 }
 
 impl std::fmt::Display for CaptureMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            CaptureMode::Hotkey => "Toggled by hotkey",
-            CaptureMode::Focus => "When window has focus",
+            CaptureMode::Fullscreen => "Fullscreen",
+            CaptureMode::Window => "Window only",
         };
         f.write_str(s)
     }
@@ -139,7 +139,7 @@ impl Default for ClientConfig {
             port: "7878".to_string(),
             sensitivity: "1.00".to_string(),
             natural_scroll: false,
-            capture_mode: CaptureMode::Hotkey,
+            capture_mode: CaptureMode::Fullscreen,
             hotkey: "Ctrl+Alt+Space".to_string(),
             require_auth: true,
             passphrase_hash: String::new(),
