@@ -142,10 +142,15 @@ pub struct SessionState {
     pub encrypt: bool,
     pub failed_decrypts: u32,
     pub tracker: KeyTracker,
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+    pub screen_width: u16,
+    pub screen_height: u16,
+    pub window_mode: bool,
 }
 
 impl SessionState {
-    pub fn new(encrypt: bool, keys: Option<SessionKeys>, src_addr: SocketAddr, key_timeout_ms: u16) -> Self {
+    pub fn new(encrypt: bool, keys: Option<SessionKeys>, src_addr: SocketAddr, key_timeout_ms: u16, screen_width: u16, screen_height: u16) -> Self {
         Self {
             keys,
             replay_window: ReplayWindow::new(),
@@ -154,6 +159,11 @@ impl SessionState {
             encrypt,
             failed_decrypts: 0,
             tracker: KeyTracker::new(key_timeout_ms),
+            cursor_x: screen_width as f32 / 2.0,
+            cursor_y: screen_height as f32 / 2.0,
+            screen_width,
+            screen_height,
+            window_mode: false,
         }
     }
 

@@ -74,6 +74,8 @@ pub struct ClientConnection {
     pub encrypt: bool,
     pub key_timeout_ms: u16,
     pub last_salt: Option<String>,
+    pub screen_size: Option<(u16, u16)>,
+    tcp_tx: mpsc::UnboundedSender<ControlMsg>,
     cipher: Option<Aes256Gcm>,
 }
 
@@ -96,6 +98,8 @@ impl Clone for ClientConnection {
             encrypt: self.encrypt,
             key_timeout_ms: self.key_timeout_ms,
             last_salt: self.last_salt.clone(),
+            screen_size: self.screen_size,
+            tcp_tx: self.tcp_tx.clone(),
             cipher: self.cipher.clone(),
         }
     }
@@ -198,7 +202,7 @@ impl ClientConnection {
             }
         };
 
-        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, phc_to_save) =
+        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, phc_to_save, screen_width, screen_height) =
             Self::handshake(tls, addr, client_require_auth, passphrase, saved_phc).await?;
         if client_encrypt != server_encrypt {
             return Err(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
@@ -215,6 +219,7 @@ impl ClientConnection {
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let (udp_tx, mut udp_rx) = mpsc::unbounded_channel::<Event>();
+        let (tcp_tx, mut tcp_rx) = mpsc::unbounded_channel::<ControlMsg>();
 
         // UDP sender task
         let udp_socket = Arc::new(udp_socket);
@@ -258,7 +263,7 @@ impl ClientConnection {
             }
         });
 
-        // TLS read task for liveness / disconnect detection
+        // TLS read task for liveness / disconnect detection + outbound control
         let shutdown_clone = shutdown.clone();
         tokio::spawn(async move {
             loop {
@@ -279,6 +284,15 @@ impl ClientConnection {
                             _ => break,
                         }
                     }
+                    Some(msg) = tcp_rx.recv() => {
+                        let bytes = match postcard::to_allocvec(&msg) {
+                            Ok(b) => b,
+                            Err(_) => continue,
+                        };
+                        if framed.send(bytes.into()).await.is_err() {
+                            break;
+                        }
+                    }
                     _ = shutdown_clone.notified() => break,
                 }
             }
@@ -287,11 +301,13 @@ impl ClientConnection {
 
         Ok((Self {
             udp_tx,
+            tcp_tx,
             _shutdown: shutdown,
             conn_id,
             encrypt,
             key_timeout_ms,
             last_salt: phc_to_save.clone(),
+            screen_size: Some((screen_width, screen_height)),
             cipher,
         }, phc_to_save))
     }
@@ -302,7 +318,7 @@ impl ClientConnection {
         client_require_auth: bool,
         passphrase: Option<String>,
         saved_phc: Option<String>,
-    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>)> {
+    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>, u16, u16)> {
         let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
         let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
@@ -376,8 +392,8 @@ impl ClientConnection {
             }
         }
 
-        let (conn_id, server_encrypt, server_auth, key_timeout_ms) = match msg {
-            ControlMsg::SessionInit { conn_id, encrypt, auth, key_timeout_ms, .. } => (conn_id, encrypt, auth, key_timeout_ms),
+        let (conn_id, server_encrypt, server_auth, key_timeout_ms, screen_width, screen_height) = match msg {
+            ControlMsg::SessionInit { conn_id, encrypt, auth, key_timeout_ms, screen_width, screen_height, .. } => (conn_id, encrypt, auth, key_timeout_ms, screen_width, screen_height),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Connect failed: expected SessionInit")),
         };
 
@@ -395,11 +411,15 @@ impl ClientConnection {
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
         udp.connect(server_addr).await?;
 
-        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, phc_to_save))
+        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, phc_to_save, screen_width, screen_height))
     }
 
     pub fn send(&self, event: &Event) {
         let _ = self.udp_tx.send(event.clone());
+    }
+
+    pub fn send_control(&self, msg: ControlMsg) {
+        let _ = self.tcp_tx.send(msg);
     }
 }
 

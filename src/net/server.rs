@@ -42,9 +42,10 @@ impl ServerListener {
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let sessions: Arc<SessionTable> = Arc::new(SessionTable::new());
+        let (screen_width, screen_height) = get_screen_size();
 
         let s = shutdown.clone();
-        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions));
+        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height));
 
         Ok(Self { shutdown, handle })
     }
@@ -63,18 +64,27 @@ impl Drop for ServerListener {
     }
 }
 
+fn get_screen_size() -> (u16, u16) {
+    #[cfg(target_os = "linux")]
+    {
+        use x11rb::connection::Connection;
+        use x11rb::rust_connection::RustConnection;
+        if let Ok((conn, screen_num)) = RustConnection::connect(None) {
+            if let Some(screen) = conn.setup().roots.get(screen_num) {
+                return (screen.width_in_pixels, screen.height_in_pixels);
+            }
+        }
+    }
+    (1920, 1080)
+}
+
 #[cfg(target_os = "linux")]
-fn get_input_injector() -> Option<InputInjector> {
-    match crate::input::InputInjector::new() {
+fn get_input_injector(screen_width: u16, screen_height: u16) -> Option<InputInjector> {
+    match crate::input::InputInjector::new(screen_width, screen_height) {
         Ok(inj) => Some(inj),
         Err(e) => {
             if e.kind() == io::ErrorKind::PermissionDenied {
                 eprintln!("[spud] Permission denied opening /dev/uinput.");
-                eprintln!("[spud] Fix: create a udev rule so the 'input' group can access it:");
-                eprintln!("[spud]   echo 'KERNEL=\"uinput\", MODE=\"0660\", GROUP=\"input\"' \\");
-                eprintln!("[spud]     | sudo tee /etc/udev/rules.d/99-uinput.rules");
-                eprintln!("[spud]   sudo udevadm control --reload-rules");
-                eprintln!("[spud]   sudo udevadm trigger");
             } else {
                 eprintln!("[spud] Failed to create input injector: {e}");
             }
@@ -94,9 +104,11 @@ async fn run_server(
     encrypt_udp: bool,
     key_timeout_ms: u16,
     sessions: Arc<SessionTable>,
+    screen_width: u16,
+    screen_height: u16,
 ) {
     #[cfg(target_os = "linux")]
-    let mut injector = get_input_injector();
+    let mut injector = get_input_injector(screen_width, screen_height);
 
     let cancel = CancellationToken::new();
     let mut buf = vec![0u8; 2048];
@@ -112,7 +124,7 @@ async fn run_server(
                         let hash = passphrase_hash.clone();
                         let child_cancel = cancel.child_token();
                         tokio::spawn(handle_client(
-                            stream, peer, acceptor, sessions, require_auth, hash, encrypt_udp, key_timeout_ms, child_cancel,
+                            stream, peer, acceptor, sessions, require_auth, hash, encrypt_udp, key_timeout_ms, child_cancel, screen_width, screen_height,
                         ));
                     }
                     Err(e) => {
@@ -189,11 +201,14 @@ async fn run_server(
                                                 inj.inject_action(action);
                                             }
                                             match &event {
-                                                crate::net::Event::MouseMove { dx, dy } => {
-                                                    let _ = inj.mouse_move(i32::from(*dx), i32::from(*dy));
+                                                crate::net::Event::MouseAbs { x, y } => {
+                                                    let px = (*x as i32 * (i32::from(session.screen_width) - 1) + 32767) / 65535;
+                                                    let py = (*y as i32 * (i32::from(session.screen_height) - 1) + 32767) / 65535;
+                                                    inj.move_abs(px, py);
                                                 }
-                                                crate::net::Event::Wheel { dx, dy } => {
-                                                    let _ = inj.wheel(*dx, *dy);
+                                                crate::net::Event::MouseMove { dx, dy } => {
+                                                    println!("[server] MouseMove dx={dx} dy={dy} window_mode={}", session.window_mode);
+                                                    inj.move_rel(i32::from(*dx), i32::from(*dy));
                                                 }
                                                 _ => {}
                                             }
@@ -231,6 +246,8 @@ async fn handle_client(
     encrypt_udp: bool,
     key_timeout_ms: u16,
     cancel: CancellationToken,
+    screen_width: u16,
+    screen_height: u16,
 ) {
     let tls = match acceptor.accept(stream).await {
         Ok(tls) => tls,
@@ -309,10 +326,10 @@ async fn handle_client(
     }
 
     let (uuid, conn_id) = generate_session();
-    let session = SessionState::new(encrypt_udp, keys, peer, key_timeout_ms);
+    let session = SessionState::new(encrypt_udp, keys, peer, key_timeout_ms, screen_width, screen_height);
     sessions.insert(conn_id, session);
 
-    let init = ControlMsg::SessionInit { conn_id, uuid, encrypt: encrypt_udp, auth: require_auth && !passphrase_hash.is_empty(), key_timeout_ms };
+    let init = ControlMsg::SessionInit { conn_id, uuid, encrypt: encrypt_udp, auth: require_auth && !passphrase_hash.is_empty(), key_timeout_ms, screen_width, screen_height };
     let bytes = match postcard::to_allocvec(&init) {
         Ok(b) => b,
         Err(_) => {
@@ -332,10 +349,20 @@ async fn handle_client(
             msg = framed.next() => {
                 match msg {
                     Some(Ok(bytes)) => {
-                        if let Ok(ControlMsg::Keepalive) = postcard::from_bytes(&bytes) {
-                            // Update activity
-                            if let Some(mut s) = sessions.get_mut(&conn_id) {
-                                s.last_activity = std::time::Instant::now();
+                        if let Ok(msg) = postcard::from_bytes::<ControlMsg>(&bytes) {
+                            match msg {
+                                ControlMsg::Keepalive => {
+                                    if let Some(mut s) = sessions.get_mut(&conn_id) {
+                                        s.last_activity = std::time::Instant::now();
+                                    }
+                                }
+                                ControlMsg::SetCaptureMode { window_mode } => {
+                                    if let Some(mut s) = sessions.get_mut(&conn_id) {
+                                        s.window_mode = window_mode;
+                                        println!("[server] conn {conn_id} capture mode: {}", if window_mode { "window" } else { "fullscreen" });
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }

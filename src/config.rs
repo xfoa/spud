@@ -57,8 +57,8 @@ impl Default for CaptureMode {
 impl std::fmt::Display for CaptureMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            CaptureMode::Fullscreen => "Fullscreen",
-            CaptureMode::Window => "Window only",
+            CaptureMode::Fullscreen => "Fullscreen (relative mouse)",
+            CaptureMode::Window => "Window only (absolute mouse)",
         };
         f.write_str(s)
     }

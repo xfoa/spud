@@ -39,6 +39,7 @@ pub enum Event {
     KeyDown(String),
     KeyUp(String),
     MouseMove { dx: i16, dy: i16 },
+    MouseAbs { x: u16, y: u16 },
     MouseButton { button: u8, pressed: bool },
     Wheel { dx: i8, dy: i8 },
     KeyRepeat(String),

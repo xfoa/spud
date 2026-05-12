@@ -237,6 +237,7 @@ impl Spud {
             }),
             Message::WindowResized(size) => {
                 self.window_size = size;
+                self.client.update(client::Message::WindowSizeChanged(size));
                 Task::none()
             }
             Message::WindowOpened(id) => {

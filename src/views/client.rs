@@ -8,6 +8,7 @@ use crate::components as ui;
 use crate::config::{CaptureMode, ClientConfig};
 use crate::discovery::{self, DiscoveredServer};
 use crate::icons;
+use crate::net::protocol::ControlMsg;
 use crate::theme as mt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +82,7 @@ pub enum Message {
     BlankScreenToggled(bool),
     ShowHotkeyOnBlankToggled(bool),
     EncryptUdpToggled(bool),
+    WindowSizeChanged(iced::Size),
 }
 
 pub struct State {
@@ -114,6 +116,8 @@ pub struct State {
     show_hotkey_on_blank: bool,
     grabbed: bool,
     encrypt_udp: bool,
+    server_screen_size: Option<(u16, u16)>,
+    window_size: Option<iced::Size>,
 }
 
 impl Default for State {
@@ -155,6 +159,8 @@ impl State {
             show_hotkey_on_blank: cfg.show_hotkey_on_blank,
             grabbed: false,
             encrypt_udp: cfg.encrypt_udp,
+            server_screen_size: None,
+            window_size: None,
         }
     }
 
@@ -204,6 +210,17 @@ impl State {
                 if let Some(phc) = phc {
                     self.passphrase_hash = phc;
                 }
+                self.server_screen_size = sender.screen_size;
+                if let Some((w, h)) = self.server_screen_size {
+                    println!("[client] Server screen size: {w}x{h}");
+                }
+                let scale = self.mouse_scale();
+                println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
+                let mode = self.capture_mode == CaptureMode::Window;
+                println!("[client] sending SetCaptureMode window_mode={mode}");
+                sender.send_control(ControlMsg::SetCaptureMode {
+                    window_mode: mode,
+                });
                 self.sender = Some(sender);
                 self.connected = true;
                 self.connecting = false;
@@ -240,6 +257,15 @@ impl State {
             Message::ReconnectSuccess(sender, gen) => {
                 if self.reconnecting && self.reconnect_generation == gen {
                     self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
+                    self.server_screen_size = sender.screen_size;
+                    if let Some((w, h)) = self.server_screen_size {
+                        println!("[client] Server screen size: {w}x{h}");
+                    }
+                    let scale = self.mouse_scale();
+                    println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
+                    sender.send_control(ControlMsg::SetCaptureMode {
+                        window_mode: self.capture_mode == CaptureMode::Window,
+                    });
                     self.sender = Some(sender);
                     self.connected = true;
                     self.reconnecting = false;
@@ -254,8 +280,21 @@ impl State {
                     self.last_error = Some("Server closed the connection.".to_string());
                 }
             }
-            Message::SensitivityChanged(v) => self.sensitivity = v,
+            Message::SensitivityChanged(v) => {
+                self.sensitivity = v;
+                if self.connected {
+                    let scale = self.mouse_scale();
+                    println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
+                }
+            }
             Message::NaturalScrollToggled(v) => self.natural_scroll = v,
+            Message::WindowSizeChanged(size) => {
+                self.window_size = Some(size);
+                if self.connected {
+                    let scale = self.mouse_scale();
+                    println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
+                }
+            }
             Message::CaptureModeChanged(m) => {
                 if self.capture_mode == CaptureMode::Fullscreen && m != CaptureMode::Fullscreen {
                     if crate::input::is_wayland_grabbed() {
@@ -265,6 +304,17 @@ impl State {
                 self.grabbed = false;
                 self.release_all_held();
                 self.capture_mode = m;
+                if let Some(ref sender) = self.sender {
+                    let mode = m == CaptureMode::Window;
+                    println!("[client] sending SetCaptureMode window_mode={mode}");
+                    sender.send_control(ControlMsg::SetCaptureMode {
+                        window_mode: mode,
+                    });
+                }
+                if self.connected {
+                    let scale = self.mouse_scale();
+                    println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
+                }
             }
             Message::RequireAuthToggled(v) => self.require_auth = v,
             Message::PassphraseChanged(s) => self.pending_passphrase = s,
@@ -309,6 +359,9 @@ impl State {
                 }
             }
             Message::Capture(event) => {
+                if matches!(event, iced::Event::Mouse(iced::mouse::Event::CursorMoved { .. })) {
+                    println!("[client] Capture CursorMoved");
+                }
                 if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                     key,
                     modifiers,
@@ -334,9 +387,24 @@ impl State {
                     CaptureMode::Fullscreen => crate::input::is_wayland_grabbed(),
                 };
                 if forward {
-                    if let Some(wire) =
-                        iced_to_wire(&event, &mut self.last_cursor, &mut self.pressed_keys, &mut self.pressed_mouse_buttons)
-                    {
+                    let is_window_mode = matches!(self.capture_mode, CaptureMode::Window);
+                    let scale = if is_window_mode {
+                        (1.0, 1.0)
+                    } else {
+                        (self.sensitivity, self.sensitivity)
+                    };
+                    if let Some(wire) = iced_to_wire(
+                        &event,
+                        &mut self.last_cursor,
+                        &mut self.pressed_keys,
+                        &mut self.pressed_mouse_buttons,
+                        scale,
+                        self.window_size,
+                        is_window_mode,
+                    ) {
+                        if matches!(wire, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. }) {
+                            println!("[client] send {:?}", wire);
+                        }
                         if let Some(sender) = &self.sender {
                             sender.send(&wire);
                         }
@@ -351,7 +419,7 @@ impl State {
                     }
                     return;
                 }
-                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons) {
+                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons, self.sensitivity) {
                     if let Some(sender) = &self.sender {
                         sender.send(&wire);
                     }
@@ -416,6 +484,27 @@ impl State {
 
     pub fn is_blank_screen_active(&self) -> bool {
         self.connected && self.capture_mode == CaptureMode::Fullscreen && self.grabbed && self.blank_screen
+    }
+
+    fn mouse_scale(&self) -> (f32, f32) {
+        match self.capture_mode {
+            CaptureMode::Fullscreen => (self.sensitivity, self.sensitivity),
+            CaptureMode::Window => {
+                let (sw, sh) = match self.server_screen_size {
+                    Some((w, h)) => (w as f32, h as f32),
+                    None => return (1.0, 1.0),
+                };
+                let (ww, wh) = match self.window_size {
+                    Some(s) => (s.width, s.height),
+                    None => return (1.0, 1.0),
+                };
+                if ww > 0.0 && wh > 0.0 {
+                    (sw / ww, sh / wh)
+                } else {
+                    (1.0, 1.0)
+                }
+            }
+        }
     }
 
     pub fn show_hotkey_on_blank(&self) -> bool {
@@ -1066,6 +1155,9 @@ fn iced_to_wire(
     last_cursor: &mut Option<Point>,
     pressed_keys: &mut HashSet<String>,
     pressed_mouse_buttons: &mut HashSet<u8>,
+    scale: (f32, f32),
+    window_size: Option<iced::Size>,
+    is_window_mode: bool,
 ) -> Option<crate::net::Event> {
     use iced::keyboard;
     use iced::mouse;
@@ -1087,12 +1179,29 @@ fn iced_to_wire(
             Some(crate::net::Event::KeyUp(name))
         }
         iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-            let result = last_cursor.map(|prev| crate::net::Event::MouseMove {
-                dx: (position.x - prev.x).round() as i16,
-                dy: (position.y - prev.y).round() as i16,
-            });
-            *last_cursor = Some(*position);
-            result.filter(|e| !matches!(e, crate::net::Event::MouseMove { dx: 0, dy: 0 }))
+            if is_window_mode {
+                let (ww, wh) = window_size.map(|s| (s.width, s.height)).unwrap_or((1.0, 1.0));
+                if ww > 0.0 && wh > 0.0 {
+                    let x = ((position.x / ww) * 65535.0).clamp(0.0, 65535.0) as u16;
+                    let y = ((position.y / wh) * 65535.0).clamp(0.0, 65535.0) as u16;
+                    *last_cursor = Some(*position);
+                    Some(crate::net::Event::MouseAbs { x, y })
+                } else {
+                    *last_cursor = Some(*position);
+                    None
+                }
+            } else {
+                let result = last_cursor.map(|prev| {
+                    let dx = ((position.x - prev.x) * scale.0).round() as i16;
+                    let dy = ((position.y - prev.y) * scale.1).round() as i16;
+                    crate::net::Event::MouseMove { dx, dy }
+                });
+                if last_cursor.is_none() {
+                    println!("[client] CursorMoved: last_cursor is None, no delta computed");
+                }
+                *last_cursor = Some(*position);
+                result.filter(|e| !matches!(e, crate::net::Event::MouseMove { dx: 0, dy: 0 }))
+            }
         }
         iced::Event::Mouse(mouse::Event::CursorLeft) => {
             *last_cursor = None;
@@ -1130,6 +1239,7 @@ fn input_event_to_wire(
     event: &crate::input::InputEvent,
     pressed_keys: &mut HashSet<String>,
     pressed_mouse_buttons: &mut HashSet<u8>,
+    sensitivity: f32,
 ) -> Option<crate::net::Event> {
     use crate::input::InputEvent;
     match event {
@@ -1150,8 +1260,8 @@ fn input_event_to_wire(
             Some(crate::net::Event::KeyUp(name))
         }
         InputEvent::MouseMove { dx, dy } => Some(crate::net::Event::MouseMove {
-            dx: *dx,
-            dy: *dy,
+            dx: ((*dx as f32) * sensitivity).round() as i16,
+            dy: ((*dy as f32) * sensitivity).round() as i16,
         }),
         InputEvent::Wheel { dx, dy } => Some(crate::net::Event::Wheel { dx: *dx, dy: *dy }),
         InputEvent::MouseButton { button, pressed: true } => {

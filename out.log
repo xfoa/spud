@@ -1,0 +1,24 @@
+[server] 10.2.0.1:43013: MouseMove { dx: 1, dy: 0 }
+[server] MouseMove dx=1 dy=0 window_mode=true
+[server] absolute_move x=12723 y=22623
+[injector] absolute_move x=12723 y=22623
+[server] 10.2.0.1:43013: MouseMove { dx: 1, dy: 0 }
+[server] MouseMove dx=1 dy=0 window_mode=true
+[server] absolute_move x=12748 y=22623
+[injector] absolute_move x=12748 y=22623
+[server] 10.2.0.1:43013: MouseMove { dx: 1, dy: -1 }
+[server] MouseMove dx=1 dy=-1 window_mode=true
+[server] absolute_move x=12774 y=22591
+[injector] absolute_move x=12774 y=22591
+[server] 10.2.0.1:43013: MouseMove { dx: 1, dy: 0 }
+[server] MouseMove dx=1 dy=0 window_mode=true
+[server] absolute_move x=12800 y=22591
+[injector] absolute_move x=12800 y=22591
+[server] 10.2.0.1:43013: MouseMove { dx: 0, dy: -1 }
+[server] MouseMove dx=0 dy=-1 window_mode=true
+[server] absolute_move x=12800 y=22559
+[injector] absolute_move x=12800 y=22559
+[server] 10.2.0.1:43013: MouseMove { dx: 0, dy: -1 }
+[server] MouseMove dx=0 dy=-1 window_mode=true
+[server] absolute_move x=12800 y=22527
+[injector] absolute_move x=12800 y=22527
