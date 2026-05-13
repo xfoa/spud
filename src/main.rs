@@ -14,6 +14,16 @@ mod theme;
 mod views;
 
 fn main() -> iced::Result {
+    if std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .contains("COSMIC")
+        && std::env::var("WAYLAND_DISPLAY").is_ok()
+    {
+        eprintln!("[spud] COSMIC detected.");
+        eprintln!("[spud] If fullscreen capture doesn't work, try: WAYLAND_DISPLAY= ./spud");
+        eprintln!("[spud] (e.g. VM tablet input can interfere with pointer grab)");
+    }
+
     let icon = iced::window::icon::from_file_data(
         include_bytes!("../resources/icon.png"),
         None,

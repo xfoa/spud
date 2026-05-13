@@ -3,6 +3,7 @@ use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use iced::futures::channel::mpsc;
 use iced::futures::stream::Stream;
@@ -14,7 +15,7 @@ use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::{
     zwp_keyboard_shortcuts_inhibit_manager_v1, zwp_keyboard_shortcuts_inhibitor_v1,
 };
 use wayland_protocols::wp::pointer_constraints::zv1::client::{
-    zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
+    zwp_confined_pointer_v1, zwp_locked_pointer_v1, zwp_pointer_constraints_v1,
 };
 use wayland_protocols::wp::relative_pointer::zv1::client::{
     zwp_relative_pointer_manager_v1, zwp_relative_pointer_v1,
@@ -63,6 +64,24 @@ pub fn listen(handles: WaylandHandles) -> impl Stream<Item = InputEvent> + Send 
     })
 }
 
+/// Tracks the lifecycle of a pointer constraint request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintState {
+    None,
+    /// lock_pointer requested, waiting for Locked/Unlocked.
+    LockPending,
+    /// lock_pointer active.
+    LockActive,
+    /// lock_pointer denied immediately; next attempt will try confine_pointer.
+    LockDenied,
+    /// confine_pointer requested, waiting for Confined/Unconfined.
+    ConfinePending,
+    /// confine_pointer active.
+    ConfineActive,
+    /// confine_pointer denied; no more fallbacks.
+    ConfineDenied,
+}
+
 struct State {
     output: mpsc::Sender<InputEvent>,
     pending_dx: f64,
@@ -71,13 +90,25 @@ struct State {
     pending_axis_x: f64,
     pending_axis_y: f64,
     last_enter_serial: Option<u32>,
+    // Fallback motion tracking for compositors that don't send
+    // zwp_relative_pointer_v1.RelativeMotion while locked.
+    last_motion_x: f64,
+    last_motion_y: f64,
+    has_last_motion: bool,
+    constraint_state: ConstraintState,
+    constraint_requested_at: Option<Instant>,
 }
+
+/// Timeout for pointer-constraint negotiation.
+const CONSTRAINT_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn run_wayland(
     handles: WaylandHandles,
     signal: Arc<GrabSignal>,
     mut output: mpsc::Sender<InputEvent>,
 ) -> Result<(), Box<dyn Error>> {
+    eprintln!("[spud] Wayland input backend starting");
+
     let backend = unsafe { Backend::from_foreign_display(handles.display as *mut _) };
     let conn = Connection::from_backend(backend);
 
@@ -88,6 +119,7 @@ fn run_wayland(
         )?
     };
     let surface = wl_surface::WlSurface::from_id(&conn, surface_id)?;
+    eprintln!("[spud] Wayland surface acquired");
 
     let (globals, mut event_queue) = registry_queue_init::<State>(&conn)?;
     let qh = event_queue.handle();
@@ -131,6 +163,15 @@ fn run_wayland(
         }
     };
 
+    eprintln!("[spud] Wayland globals bound");
+
+    if std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .contains("COSMIC")
+    {
+        eprintln!("[spud] COSMIC compositor detected.");
+    }
+
     let pointer = seat.get_pointer(&qh, ());
     let _relative = rel_manager.get_relative_pointer(&pointer, &qh, ());
 
@@ -142,9 +183,15 @@ fn run_wayland(
         pending_axis_x: 0.0,
         pending_axis_y: 0.0,
         last_enter_serial: None,
+        last_motion_x: 0.0,
+        last_motion_y: 0.0,
+        has_last_motion: false,
+        constraint_state: ConstraintState::None,
+        constraint_requested_at: None,
     };
 
     let mut locked: Option<zwp_locked_pointer_v1::ZwpLockedPointerV1> = None;
+    let mut confined: Option<zwp_confined_pointer_v1::ZwpConfinedPointerV1> = None;
     let mut inhibitor: Option<zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1> = None;
 
     conn.flush()?;
@@ -154,37 +201,114 @@ fn run_wayland(
             break;
         }
 
-        if let Some(grabbed) = signal.take_dirty() {
-            state.grabbed = grabbed;
-            if grabbed {
-                if locked.is_none() {
-                    let lock = constraints.lock_pointer(
-                        &surface,
-                        &pointer,
-                        None,
-                        zwp_pointer_constraints_v1::Lifetime::Persistent,
-                        &qh,
-                        (),
-                    );
-                    locked = Some(lock);
+        // Timeout-based lock attempt detection (section 6.3 / 6.5 of report).
+        if let Some(requested_at) = state.constraint_requested_at {
+            if requested_at.elapsed() > CONSTRAINT_TIMEOUT {
+                state.constraint_requested_at = None;
+                match state.constraint_state {
+                    ConstraintState::LockPending => {
+                        eprintln!(
+                            "[spud] wayland: lock attempt timed out, \
+                             falling back to confinement"
+                        );
+                        if let Some(l) = locked.take() {
+                            l.destroy();
+                        }
+                        let confine = constraints.confine_pointer(
+                            &surface,
+                            &pointer,
+                            None,
+                            zwp_pointer_constraints_v1::Lifetime::Persistent,
+                            &qh,
+                            signal.clone(),
+                        );
+                        confined = Some(confine);
+                        state.constraint_state = ConstraintState::ConfinePending;
+                        state.constraint_requested_at = Some(Instant::now());
+                    }
+                    ConstraintState::ConfinePending => {
+                        eprintln!(
+                            "[spud] wayland: confinement attempt timed out, giving up"
+                        );
+                        if let Some(c) = confined.take() {
+                            c.destroy();
+                        }
+                        state.constraint_state = ConstraintState::ConfineDenied;
+                        state.grabbed = false;
+                        state.has_last_motion = false;
+                        let _ = state
+                            .output
+                            .try_send(InputEvent::HotkeyToggled { grabbed: false });
+                    }
+                    _ => {}
                 }
-                let _ = state.last_enter_serial;
+                conn.flush()?;
+            }
+        }
+
+        if let Some(requested) = signal.take_dirty() {
+            if requested {
+                match state.constraint_state {
+                    ConstraintState::None | ConstraintState::LockDenied => {
+                        eprintln!("[spud] wayland: requesting pointer lock");
+                        let lock = constraints.lock_pointer(
+                            &surface,
+                            &pointer,
+                            None,
+                            zwp_pointer_constraints_v1::Lifetime::Persistent,
+                            &qh,
+                            signal.clone(),
+                        );
+                        locked = Some(lock);
+                        state.constraint_state = ConstraintState::LockPending;
+                        state.constraint_requested_at = Some(Instant::now());
+                    }
+                    ConstraintState::ConfineDenied => {
+                        eprintln!(
+                            "[spud] wayland: pointer constraints unavailable, giving up"
+                        );
+                        state.grabbed = false;
+                        state.has_last_motion = false;
+                        let _ = state.output.try_send(InputEvent::BackendError(
+                            "Pointer constraints unavailable".to_string(),
+                        ));
+                    }
+                    _ => {
+                        // Already pending or active; nothing to do.
+                    }
+                }
                 if inhibitor.is_none() {
                     if let Some(manager) = &inhibit_manager {
                         inhibitor = Some(manager.inhibit_shortcuts(&surface, &seat, &qh, ()));
                     }
                 }
             } else {
+                eprintln!("[spud] wayland: releasing pointer constraints");
                 if let Some(l) = locked.take() {
                     l.destroy();
+                }
+                if let Some(c) = confined.take() {
+                    c.destroy();
                 }
                 if let Some(i) = inhibitor.take() {
                     i.destroy();
                 }
+                state.grabbed = false;
+                state.has_last_motion = false;
+                state.constraint_requested_at = None;
+                // Preserve LockDenied / ConfineDenied so the next toggle
+                // remembers the fallback path instead of retrying the
+                // primary constraint that already failed.
+                if !matches!(
+                    state.constraint_state,
+                    ConstraintState::LockDenied | ConstraintState::ConfineDenied
+                ) {
+                    state.constraint_state = ConstraintState::None;
+                }
+                let _ = state
+                    .output
+                    .try_send(InputEvent::HotkeyToggled { grabbed: false });
             }
-            let _ = state
-                .output
-                .try_send(InputEvent::HotkeyToggled { grabbed });
             conn.flush()?;
         }
 
@@ -213,6 +337,9 @@ fn run_wayland(
 
     if let Some(l) = locked.take() {
         l.destroy();
+    }
+    if let Some(c) = confined.take() {
+        c.destroy();
     }
     if let Some(i) = inhibitor.take() {
         i.destroy();
@@ -243,14 +370,38 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Enter { serial, .. } = event {
-            state.last_enter_serial = Some(serial);
-            return;
-        }
-        if !state.grabbed {
-            return;
-        }
         match event {
+            wl_pointer::Event::Enter {
+                serial,
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.last_enter_serial = Some(serial);
+                state.has_last_motion = false;
+                state.last_motion_x = surface_x;
+                state.last_motion_y = surface_y;
+            }
+            wl_pointer::Event::Leave { .. } => {
+                state.has_last_motion = false;
+            }
+            _ if !state.grabbed => {}
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                if state.has_last_motion {
+                    let dx = (surface_x - state.last_motion_x) as i16;
+                    let dy = (surface_y - state.last_motion_y) as i16;
+                    if dx != 0 || dy != 0 {
+                        let _ = state.output.try_send(InputEvent::MouseMove { dx, dy });
+                    }
+                }
+                state.last_motion_x = surface_x;
+                state.last_motion_y = surface_y;
+                state.has_last_motion = true;
+            }
             wl_pointer::Event::Button {
                 button,
                 state: btn_state,
@@ -345,26 +496,93 @@ fn map_button(button: u32) -> u8 {
 
 wayland_client::delegate_noop!(State: ignore wl_seat::WlSeat);
 wayland_client::delegate_noop!(State: ignore zwp_pointer_constraints_v1::ZwpPointerConstraintsV1);
-impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, ()> for State {
+
+impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, Arc<GrabSignal>> for State {
     fn event(
-        _state: &mut Self,
+        state: &mut Self,
         _proxy: &zwp_locked_pointer_v1::ZwpLockedPointerV1,
         event: <zwp_locked_pointer_v1::ZwpLockedPointerV1 as Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        signal: &Arc<GrabSignal>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
     ) {
         match event {
             zwp_locked_pointer_v1::Event::Locked => {
                 eprintln!("[spud] wayland: pointer lock active");
+                if signal.is_grabbed() {
+                    state.constraint_state = ConstraintState::LockActive;
+                    state.constraint_requested_at = None;
+                    state.grabbed = true;
+                    state.has_last_motion = false;
+                    let _ = state
+                        .output
+                        .try_send(InputEvent::HotkeyToggled { grabbed: true });
+                }
             }
             zwp_locked_pointer_v1::Event::Unlocked => {
-                eprintln!("[spud] wayland: pointer lock denied/unlocked");
+                if matches!(state.constraint_state, ConstraintState::LockPending) {
+                    // Lock was denied before it ever became active.
+                    eprintln!("[spud] wayland: pointer lock denied");
+                    state.constraint_state = ConstraintState::LockDenied;
+                } else {
+                    // Lock was active and has now been released.
+                    eprintln!("[spud] wayland: pointer lock released");
+                    state.constraint_state = ConstraintState::None;
+                }
+                state.constraint_requested_at = None;
+                state.grabbed = false;
+                state.has_last_motion = false;
+                let _ = state
+                    .output
+                    .try_send(InputEvent::HotkeyToggled { grabbed: false });
             }
             _ => {}
         }
     }
 }
+
+impl Dispatch<zwp_confined_pointer_v1::ZwpConfinedPointerV1, Arc<GrabSignal>> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_confined_pointer_v1::ZwpConfinedPointerV1,
+        event: <zwp_confined_pointer_v1::ZwpConfinedPointerV1 as Proxy>::Event,
+        signal: &Arc<GrabSignal>,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_confined_pointer_v1::Event::Confined => {
+                eprintln!("[spud] wayland: pointer confinement active");
+                if signal.is_grabbed() {
+                    state.constraint_state = ConstraintState::ConfineActive;
+                    state.constraint_requested_at = None;
+                    state.grabbed = true;
+                    state.has_last_motion = false;
+                    let _ = state
+                        .output
+                        .try_send(InputEvent::HotkeyToggled { grabbed: true });
+                }
+            }
+            zwp_confined_pointer_v1::Event::Unconfined => {
+                if matches!(state.constraint_state, ConstraintState::ConfinePending) {
+                    eprintln!("[spud] wayland: pointer confinement denied");
+                    state.constraint_state = ConstraintState::ConfineDenied;
+                } else {
+                    eprintln!("[spud] wayland: pointer confinement released");
+                    state.constraint_state = ConstraintState::None;
+                }
+                state.constraint_requested_at = None;
+                state.grabbed = false;
+                state.has_last_motion = false;
+                let _ = state
+                    .output
+                    .try_send(InputEvent::HotkeyToggled { grabbed: false });
+            }
+            _ => {}
+        }
+    }
+}
+
 wayland_client::delegate_noop!(State: ignore zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1);
 wayland_client::delegate_noop!(State: ignore zwp_keyboard_shortcuts_inhibitor_v1::ZwpKeyboardShortcutsInhibitorV1);

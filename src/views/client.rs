@@ -115,6 +115,9 @@ pub struct State {
     blank_screen: bool,
     show_hotkey_on_blank: bool,
     grabbed: bool,
+    /// User's explicit intent to capture. Persists even if the backend
+    /// loses the grab unexpectedly (e.g. COSMIC pointer constraint bugs).
+    user_capturing: bool,
     encrypt_udp: bool,
     server_screen_size: Option<(u16, u16)>,
     window_size: Option<iced::Size>,
@@ -158,6 +161,7 @@ impl State {
             blank_screen: cfg.blank_screen,
             show_hotkey_on_blank: cfg.show_hotkey_on_blank,
             grabbed: false,
+            user_capturing: false,
             encrypt_udp: cfg.encrypt_udp,
             server_screen_size: None,
             window_size: None,
@@ -240,6 +244,7 @@ impl State {
                 self.reconnecting = false;
                 self.reconnect_generation += 1;
                 self.grabbed = false;
+                self.user_capturing = false;
             }
             Message::ConnectionLost => {
                 if self.connected {
@@ -252,6 +257,7 @@ impl State {
                     self.reconnecting = true;
                     self.reconnect_generation += 1;
                     self.grabbed = false;
+                    self.user_capturing = false;
                 }
             }
             Message::ReconnectSuccess(sender, gen) => {
@@ -270,6 +276,7 @@ impl State {
                     self.connected = true;
                     self.reconnecting = false;
                     self.grabbed = false;
+                    self.user_capturing = false;
                     self.last_error = None;
                 }
             }
@@ -277,6 +284,7 @@ impl State {
                 if self.reconnecting && self.reconnect_generation == gen {
                     self.reconnecting = false;
                     self.grabbed = false;
+                    self.user_capturing = false;
                     self.last_error = Some("Server closed the connection.".to_string());
                 }
             }
@@ -371,10 +379,12 @@ impl State {
                     if format_chord(key, *modifiers).as_deref() == Some(self.hotkey.as_str())
                     {
                         if self.capture_mode == CaptureMode::Fullscreen {
-                            crate::input::toggle_wayland_grab();
-                            self.grabbed = crate::input::is_wayland_grabbed();
+                            let new_grab = crate::input::toggle_wayland_grab();
+                            self.user_capturing = new_grab;
+                            self.grabbed = new_grab;
                         } else {
-                            self.grabbed = !self.grabbed;
+                            self.user_capturing = !self.user_capturing;
+                            self.grabbed = self.user_capturing;
                             if !self.grabbed {
                                 self.release_all_held();
                             }
@@ -414,10 +424,14 @@ impl State {
             Message::HotkeyEvent(event) => {
                 if let crate::input::InputEvent::HotkeyToggled { grabbed } = event {
                     self.grabbed = grabbed;
+                    self.user_capturing = grabbed;
                     if !grabbed {
                         self.release_all_held();
                     }
                     return;
+                }
+                if let crate::input::InputEvent::BackendError(ref msg) = event {
+                    eprintln!("[client] input backend error: {msg}");
                 }
                 if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons, self.sensitivity) {
                     if let Some(sender) = &self.sender {
@@ -483,7 +497,7 @@ impl State {
     }
 
     pub fn is_blank_screen_active(&self) -> bool {
-        self.connected && self.capture_mode == CaptureMode::Fullscreen && self.grabbed && self.blank_screen
+        self.connected && self.capture_mode == CaptureMode::Fullscreen && self.user_capturing && self.blank_screen
     }
 
     fn mouse_scale(&self) -> (f32, f32) {

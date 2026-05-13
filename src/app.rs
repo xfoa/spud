@@ -250,6 +250,11 @@ impl Spud {
                     .map(Message::WaylandHandlesReady)
             }
             Message::WaylandHandlesReady(handles) => {
+                if handles.is_some() {
+                    eprintln!("[spud] Wayland handles acquired");
+                } else {
+                    eprintln!("[spud] Wayland handles not available, falling back to X11 backend");
+                }
                 self.wayland_handles = handles;
                 Task::none()
             }
@@ -319,14 +324,17 @@ impl Spud {
             });
             subs.push(capture);
         } else if self.mode == Mode::Client && self.client.is_capturing_fullscreen() {
+            // Always subscribe to iced keyboard events so the Capture handler
+            // can update user_capturing on both X11 and Wayland.
+            let keyboard = iced::event::listen().filter_map(|event| match event {
+                iced::Event::Keyboard(_) => {
+                    Some(Message::Client(client::Message::Capture(event)))
+                }
+                _ => None,
+            });
+            subs.push(keyboard);
+
             if let Some(handles) = self.wayland_handles {
-                let keyboard = iced::event::listen().filter_map(|event| match event {
-                    iced::Event::Keyboard(_) => {
-                        Some(Message::Client(client::Message::Capture(event)))
-                    }
-                    _ => None,
-                });
-                subs.push(keyboard);
                 subs.push(Subscription::run_with(handles, build_wayland_hotkey_stream));
             } else {
                 let hotkey = self.client.hotkey_string().to_string();
@@ -427,7 +435,7 @@ impl Spud {
             window_content.into(),
         ];
 
-        if self.mode == Mode::Client && self.client.is_capturing_fullscreen() && self.client.is_grabbed() {
+        if self.mode == Mode::Client && self.client.is_capturing_fullscreen() {
             let show_text = self.client.is_blank_screen_active() && self.client.show_hotkey_on_blank();
             let overlay_text: Element<Message> = if show_text {
                 text(String::new() + "Press " + self.client.hotkey_display() + " to stop capturing")
@@ -442,7 +450,7 @@ impl Spud {
             } else {
                 iced::Color::from_rgba(0.0, 0.0, 0.0, 0.0)
             };
-            let overlay = mouse_area(
+            let mut overlay = mouse_area(
                 container(overlay_text)
                     .width(Length::Fill)
                     .height(Length::Fill)
@@ -452,10 +460,11 @@ impl Spud {
                         background: Some(Background::Color(bg)),
                         ..Default::default()
                     }),
-            )
-            .interaction(iced::mouse::Interaction::Hidden)
-            .into();
-            layers.push(overlay);
+            );
+            if self.client.is_grabbed() {
+                overlay = overlay.interaction(iced::mouse::Interaction::Hidden);
+            }
+            layers.push(overlay.into());
         }
 
         if self.mode == Mode::Client && self.client.is_capturing_window() && self.client.is_grabbed() {
