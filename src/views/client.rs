@@ -861,7 +861,11 @@ impl State {
             .spacing(0),
         );
 
-        let body = column![sens_card, ui::v_space(16.0), scroll_card].spacing(0);
+        let body = if self.capture_mode == CaptureMode::Window {
+            column![scroll_card].spacing(0)
+        } else {
+            column![sens_card, ui::v_space(16.0), scroll_card].spacing(0)
+        };
         ui::page_body("Input", body)
     }
 
