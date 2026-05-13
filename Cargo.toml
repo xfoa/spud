@@ -40,6 +40,7 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
 raw-window-handle = "0.6"
 libc = "0.2"
 kinput = "0.3"
+evdev = "0.13"
 
 [profile.dev]
 opt-level = 1

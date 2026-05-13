@@ -7,6 +7,8 @@ mod x11;
 
 #[cfg(target_os = "linux")]
 pub use inject::InputInjector;
+#[cfg(target_os = "linux")]
+pub use inject::{parse_key_name, wire_to_linux_button};
 
 use iced::futures::stream::BoxStream;
 #[cfg(not(target_os = "linux"))]

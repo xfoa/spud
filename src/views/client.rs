@@ -411,6 +411,7 @@ impl State {
                         scale,
                         self.window_size,
                         is_window_mode,
+                        self.natural_scroll,
                     ) {
                         if matches!(wire, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. }) {
                             println!("[client] send {:?}", wire);
@@ -433,7 +434,7 @@ impl State {
                 if let crate::input::InputEvent::BackendError(ref msg) = event {
                     eprintln!("[client] input backend error: {msg}");
                 }
-                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons, self.sensitivity) {
+                if let Some(wire) = input_event_to_wire(&event, &mut self.pressed_keys, &mut self.pressed_mouse_buttons, self.sensitivity, self.natural_scroll) {
                     if let Some(sender) = &self.sender {
                         sender.send(&wire);
                     }
@@ -1172,6 +1173,7 @@ fn iced_to_wire(
     scale: (f32, f32),
     window_size: Option<iced::Size>,
     is_window_mode: bool,
+    natural_scroll: bool,
 ) -> Option<crate::net::Event> {
     use iced::keyboard;
     use iced::mouse;
@@ -1242,7 +1244,10 @@ fn iced_to_wire(
                 }
             };
             let dx = x.clamp(-127, 127) as i8;
-            let dy = y.clamp(-127, 127) as i8;
+            let mut dy = y.clamp(-127, 127) as i8;
+            if natural_scroll {
+                dy = -dy;
+            }
             (dx != 0 || dy != 0).then_some(crate::net::Event::Wheel { dx, dy })
         }
         _ => None,
@@ -1254,6 +1259,7 @@ fn input_event_to_wire(
     pressed_keys: &mut HashSet<String>,
     pressed_mouse_buttons: &mut HashSet<u8>,
     sensitivity: f32,
+    natural_scroll: bool,
 ) -> Option<crate::net::Event> {
     use crate::input::InputEvent;
     match event {
@@ -1277,7 +1283,15 @@ fn input_event_to_wire(
             dx: ((*dx as f32) * sensitivity).round() as i16,
             dy: ((*dy as f32) * sensitivity).round() as i16,
         }),
-        InputEvent::Wheel { dx, dy } => Some(crate::net::Event::Wheel { dx: *dx, dy: *dy }),
+        InputEvent::Wheel { dx, dy } => {
+            // X11/Wayland backends use dy > 0 = down, but iced uses dy > 0 = up.
+            // Negate to match window mode convention, then apply natural scroll.
+            let mut dy = -*dy;
+            if natural_scroll {
+                dy = -dy;
+            }
+            Some(crate::net::Event::Wheel { dx: *dx, dy })
+        }
         InputEvent::MouseButton { button, pressed: true } => {
             if pressed_mouse_buttons.insert(*button) {
                 Some(crate::net::Event::MouseButton { button: *button, pressed: true })
