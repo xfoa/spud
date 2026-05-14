@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::{checkbox, column, container, row, slider, text, text_input};
@@ -103,6 +105,7 @@ pub struct State {
     discovered: Vec<DiscoveredServer>,
     selected_addrs: Vec<SocketAddr>,
     selected_fullname: Option<String>,
+    reconnect_cancel: Option<Arc<AtomicBool>>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
     sender: Option<crate::net::Sender>,
@@ -151,6 +154,7 @@ impl State {
             discovered: Vec::new(),
             selected_addrs: Vec::new(),
             selected_fullname: None,
+            reconnect_cancel: None,
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
             sender: None,
@@ -268,6 +272,9 @@ impl State {
                 self.pressed_mouse_buttons.clear();
                 self.reconnecting = false;
                 self.reconnect_generation += 1;
+                if let Some(cancel) = self.reconnect_cancel.take() {
+                    cancel.store(true, Ordering::Relaxed);
+                }
                 self.grabbed = false;
                 self.user_capturing = false;
             }
@@ -281,6 +288,7 @@ impl State {
                     self.pressed_mouse_buttons.clear();
                     self.reconnecting = true;
                     self.reconnect_generation += 1;
+                    self.reconnect_cancel = None;
                     self.grabbed = false;
                     self.user_capturing = false;
                 }
@@ -300,6 +308,7 @@ impl State {
                     self.sender = Some(sender);
                     self.connected = true;
                     self.reconnecting = false;
+                    self.reconnect_cancel = None;
                     self.grabbed = false;
                     self.user_capturing = false;
                     self.last_error = None;
@@ -308,6 +317,7 @@ impl State {
             Message::ReconnectFailed(gen) => {
                 if self.reconnecting && self.reconnect_generation == gen {
                     self.reconnecting = false;
+                    self.reconnect_cancel = None;
                     self.grabbed = false;
                     self.user_capturing = false;
                     self.last_error = Some("Server closed the connection.".to_string());
@@ -364,16 +374,19 @@ impl State {
                     self.selected_fullname = Some(server.fullname.clone());
                 }
             }
-            Message::DiscoveryEvent(event) => match event {
-                discovery::Event::Found(server) => {
-                    self.discovered.retain(|s| s.fullname != server.fullname);
-                    self.discovered.push(server);
-                    self.discovered.sort_by(|a, b| a.name.cmp(&b.name));
+            Message::DiscoveryEvent(event) => {
+                match event {
+                    discovery::Event::Found(server) => {
+                        self.discovered.retain(|s| s.fullname != server.fullname);
+                        self.discovered.push(server);
+                        self.discovered.sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                    discovery::Event::Lost(fullname) => {
+                        self.discovered.retain(|s| s.fullname != fullname);
+                    }
                 }
-                discovery::Event::Lost(fullname) => {
-                    self.discovered.retain(|s| s.fullname != fullname);
-                }
-            },
+                self.sync_selection_from_input();
+            }
             Message::OpenHotkeyDialog => {
                 self.hotkey_dialog_open = true;
                 self.pending_hotkey = String::new();
@@ -605,6 +618,10 @@ impl State {
 
     pub fn selected_addrs(&self) -> &[SocketAddr] {
         &self.selected_addrs
+    }
+
+    pub fn set_reconnect_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.reconnect_cancel = Some(cancel);
     }
 
     pub fn port(&self) -> &str {

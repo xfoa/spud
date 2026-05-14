@@ -2,6 +2,8 @@ use iced::futures::Stream;
 use iced::futures::StreamExt;
 use iced::widget::{column, container, mouse_area, row, scrollable, stack, text};
 use iced::{Background, Element, Length, Size, Subscription, Task, Theme};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::components as ui;
 use crate::config::{Config, Mode};
@@ -70,9 +72,13 @@ async fn reconnect(
     saved_phc: Option<String>,
     client_encrypt: bool,
     timeout: std::time::Duration,
+    cancel: Arc<AtomicBool>,
 ) -> Result<(crate::net::Sender, Option<String>), ()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(());
+        }
         match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone()).await {
             Ok(result) => return Ok(result),
             Err(_) => {
@@ -241,6 +247,8 @@ impl Spud {
                         None
                     };
                     let client_encrypt = self.client.encrypt_udp();
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    self.client.set_reconnect_cancel(cancel.clone());
                     return Task::perform(
                         reconnect(
                             host,
@@ -251,6 +259,7 @@ impl Spud {
                             saved_phc,
                             client_encrypt,
                             timeout,
+                            cancel,
                         ),
                         move |result| match result {
                             Ok((sender, _phc)) => {
