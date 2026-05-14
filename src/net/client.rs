@@ -238,6 +238,7 @@ impl ClientConnection {
         saved_phc: Option<String>,
         override_fingerprint: Option<[u8; 32]>,
         max_batch: u8,
+        udp_drop_percent: u8,
     ) -> Result<(Self, Option<String>), ConnectError> {
         let addrs: Vec<SocketAddr> = match addrs {
             Some(a) if !a.is_empty() => a,
@@ -393,14 +394,18 @@ impl ClientConnection {
                     Some(event) = udp_rx.recv() => {
                         batch.push(event);
                         if batch.len() >= max_batch {
-                            send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                                send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            }
                             batch.clear();
                             flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
                         }
                     }
                     _ = &mut flush_deadline => {
                         if !batch.is_empty() {
-                            send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                                send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            }
                             batch.clear();
                         }
                         flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
@@ -411,7 +416,9 @@ impl ClientConnection {
 
             // Flush any remaining events on shutdown
             if !batch.is_empty() {
-                send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                    send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                }
             }
         });
 

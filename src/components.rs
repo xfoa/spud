@@ -562,7 +562,6 @@ pub fn card_title<'a, Message: 'a>(label: &'a str) -> Element<'a, Message> {
     text(label)
         .size(18)
         .font(Font {
-           weight: font::Weight::Medium,
            ..Font::default()
         })
         .color(mt::ON_SURFACE)

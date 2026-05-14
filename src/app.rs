@@ -74,13 +74,14 @@ async fn reconnect(
     timeout: std::time::Duration,
     cancel: Arc<AtomicBool>,
     max_batch: u8,
+    udp_drop_percent: u8,
 ) -> Result<(crate::net::Sender, Option<String>), ()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
         if cancel.load(Ordering::Relaxed) {
             return Err(());
         }
-        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone(), None, max_batch).await {
+        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone(), None, max_batch, udp_drop_percent).await {
             Ok(result) => return Ok(result),
             Err(crate::net::client::ConnectError::FingerprintMismatch(_)) => return Err(()),
             Err(_) => {
@@ -228,11 +229,12 @@ impl Spud {
                     };
                     let client_encrypt = self.client.encrypt_udp();
                     let max_batch = self.client.mouse_batch_size();
+                    let udp_drop_percent = self.client.udp_drop_percent();
                     let host2 = host.clone();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch).await
-                        },
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch, udp_drop_percent).await
+                        }
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
@@ -257,11 +259,12 @@ impl Spud {
                     };
                     let client_encrypt = self.client.encrypt_udp();
                     let max_batch = self.client.mouse_batch_size();
+                    let udp_drop_percent = self.client.udp_drop_percent();
                     let host2 = host.clone();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, Some(fp), max_batch).await
-                        },
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, Some(fp), max_batch, udp_drop_percent).await
+                        }
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
@@ -287,11 +290,12 @@ impl Spud {
                     };
                     let client_encrypt = self.client.encrypt_udp();
                     let max_batch = self.client.mouse_batch_size();
+                    let udp_drop_percent = self.client.udp_drop_percent();
                     let host2 = host.clone();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch).await
-                        },
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch, udp_drop_percent).await
+                        }
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
@@ -333,6 +337,7 @@ impl Spud {
                             timeout,
                             cancel,
                             self.client.mouse_batch_size(),
+                            self.client.udp_drop_percent(),
                         ),
                         move |result| match result {
                             Ok((sender, _phc)) => {

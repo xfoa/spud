@@ -4218,6 +4218,7 @@ dependencies = [
  "dashmap",
  "dirs",
  "evdev",
+ "fastrand",
  "futures",
  "hex",
  "hkdf",
