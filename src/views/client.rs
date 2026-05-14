@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::net::SocketAddr;
 
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::{checkbox, column, container, row, slider, text, text_input};
@@ -100,6 +101,8 @@ pub struct State {
     pending_passphrase: String,
     passphrase_hash: String,
     discovered: Vec<DiscoveredServer>,
+    selected_addrs: Vec<SocketAddr>,
+    selected_fullname: Option<String>,
     pub hotkey_dialog_open: bool,
     pending_hotkey: String,
     sender: Option<crate::net::Sender>,
@@ -146,6 +149,8 @@ impl State {
             pending_passphrase: String::new(),
             passphrase_hash: cfg.passphrase_hash.clone(),
             discovered: Vec::new(),
+            selected_addrs: Vec::new(),
+            selected_fullname: None,
             hotkey_dialog_open: false,
             pending_hotkey: String::new(),
             sender: None,
@@ -188,6 +193,22 @@ impl State {
 }
 
 impl State {
+    /// If the current host/port input matches a discovered server by IP,
+    /// select it. Otherwise clear the selection.
+    fn sync_selection_from_input(&mut self) {
+        if let Ok(ip) = self.host.parse::<std::net::IpAddr>() {
+            if let Some(server) = self.discovered.iter().find(|s| {
+                s.port == self.port && s.addrs.iter().any(|a| a.ip() == ip)
+            }) {
+                self.selected_fullname = Some(server.fullname.clone());
+                self.selected_addrs = server.addrs.clone();
+                return;
+            }
+        }
+        self.selected_fullname = None;
+        self.selected_addrs.clear();
+    }
+
     pub fn update(&mut self, message: Message) {
         match message {
             Message::SelectPage(p) => {
@@ -199,10 +220,14 @@ impl State {
                 }
                 self.page = p;
             }
-            Message::HostChanged(s) => self.host = s,
+            Message::HostChanged(s) => {
+                self.host = s;
+                self.sync_selection_from_input();
+            }
             Message::PortChanged(s) => {
                 if s.chars().all(|c| c.is_ascii_digit()) && s.len() <= 5 {
                     self.port = s;
+                    self.sync_selection_from_input();
                 }
             }
             Message::Connect => {
@@ -328,13 +353,20 @@ impl State {
             Message::PassphraseChanged(s) => self.pending_passphrase = s,
             Message::SelectDiscovered(i) => {
                 if let Some(server) = self.discovered.get(i) {
-                    self.host = server.host.clone();
+                    // Use the resolved IP for connection instead of hostname.
+                    self.host = server
+                        .addrs
+                        .first()
+                        .map(|a| a.ip().to_string())
+                        .unwrap_or_else(|| server.host.clone());
                     self.port = server.port.clone();
+                    self.selected_addrs = server.addrs.clone();
+                    self.selected_fullname = Some(server.fullname.clone());
                 }
             }
             Message::DiscoveryEvent(event) => match event {
                 discovery::Event::Found(server) => {
-                    self.discovered.retain(|s| s.address != server.address);
+                    self.discovered.retain(|s| s.fullname != server.fullname);
                     self.discovered.push(server);
                     self.discovered.sort_by(|a, b| a.name.cmp(&b.name));
                 }
@@ -571,6 +603,10 @@ impl State {
         &self.host
     }
 
+    pub fn selected_addrs(&self) -> &[SocketAddr] {
+        &self.selected_addrs
+    }
+
     pub fn port(&self) -> &str {
         &self.port
     }
@@ -792,13 +828,19 @@ impl State {
                 .enumerate()
                 .map(|(j, s)| {
                     let idx = base + j;
-                    let selected = self.host == s.host && self.port == s.port;
+                    let selected = self.selected_fullname.as_ref() == Some(&s.fullname);
                     let on_press = (!self.connected && !self.connecting && !self.reconnecting)
                         .then_some(Message::SelectDiscovered(idx));
+                    let ip_address = s
+                        .addrs
+                        .first()
+                        .map(|a| a.to_string())
+                        .unwrap_or_else(|| s.address.clone());
                     ui::server_tile(
                         s.icon,
                         s.name.as_str(),
-                        s.address.as_str(),
+                        s.host.as_str(),
+                        ip_address,
                         s.auth,
                         s.encrypt,
                         selected,

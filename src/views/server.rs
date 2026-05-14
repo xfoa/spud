@@ -70,6 +70,7 @@ pub struct State {
     page: Page,
     running: bool,
     bind_address: String,
+    bind_options: Vec<String>,
     port: String,
     discoverable: bool,
     require_auth: bool,
@@ -93,10 +94,20 @@ impl Default for State {
 
 impl State {
     pub fn from_config(cfg: &ServerConfig) -> Self {
+        let bind_address = if cfg.bind_address.is_empty() {
+            "0.0.0.0".to_string()
+        } else {
+            cfg.bind_address.clone()
+        };
+        let mut bind_options = crate::discovery::bind_options();
+        if !bind_options.contains(&bind_address) {
+            bind_options.push(bind_address.clone());
+        }
         Self {
             page: Page::Status,
             running: false,
-            bind_address: cfg.bind_address.clone(),
+            bind_address,
+            bind_options,
             port: cfg.port.clone(),
             discoverable: cfg.discoverable,
             require_auth: cfg.require_auth,
@@ -166,7 +177,7 @@ impl State {
         self.registration = None;
         if self.running && self.discoverable {
             let port = self.port.parse::<u16>().unwrap_or(7878);
-            self.registration = crate::discovery::Registration::new(&self.name, port, self.icon, self.require_auth, self.encrypt_udp);
+            self.registration = crate::discovery::Registration::new(&self.name, port, &self.bind_address, self.icon, self.require_auth, self.encrypt_udp);
         }
     }
 
@@ -357,9 +368,10 @@ impl State {
             ui::filled_button("Start server", (!passphrase_missing && !client_connected).then_some(Message::StartServer))
         };
 
+        let port = self.port.parse::<u16>().unwrap_or(7878);
         let endpoint = self.active_config.as_ref().map_or_else(
-            || format!("{}:{}", self.bind_address, self.port),
-            |c| format!("{}:{}", c.bind_address, c.port),
+            || crate::discovery::display_endpoint(&self.bind_address, port),
+            |c| crate::discovery::display_endpoint(&c.bind_address, port),
         );
 
         let mut status_row: Row<Message> =
@@ -510,12 +522,13 @@ impl State {
     fn network_page(&self) -> Element<'_, Message> {
         let bind_field = column![
             ui::field_label("Bind address"),
-            text_input("0.0.0.0", &self.bind_address)
-                .on_input(Message::BindAddressChanged)
-                .padding(12)
-                .size(14),
+            ui::pick_list(
+                self.bind_options.clone(),
+                Some(self.bind_address.clone()),
+                Message::BindAddressChanged,
+            ),
             ui::v_space(4.0),
-            ui::helper_text("Use 0.0.0.0 to listen on every interface."),
+            ui::helper_text("0.0.0.0 binds to all interfaces and advertises all detected IPs."),
         ]
         .spacing(6);
 

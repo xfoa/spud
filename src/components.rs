@@ -286,7 +286,8 @@ pub fn card<'a, Message: 'a>(
 pub fn server_tile<'a, Message: 'a + Clone>(
     icon: char,
     name: &'a str,
-    address: &'a str,
+    hostname: &'a str,
+    address: String,
     auth: bool,
     encrypt: bool,
     selected: bool,
@@ -296,8 +297,9 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     let name_color = if selected { mt::ON_PRIMARY_CONTAINER } else { mt::ON_SURFACE };
 
     let (name_display, name_truncated) = truncate(name, 18);
-    let (address_display, address_truncated) = truncate(address, 22);
-    let any_truncated = name_truncated || address_truncated;
+    let (hostname_display, hostname_truncated) = truncate(hostname, 22);
+    let (address_display, address_truncated) = truncate(&address, 22);
+    let any_truncated = name_truncated || hostname_truncated || address_truncated;
 
     let base_icon = text(icon).font(crate::icons::FA_SOLID).size(38).color(icon_color);
     let icon_container = container(base_icon)
@@ -308,26 +310,34 @@ pub fn server_tile<'a, Message: 'a + Clone>(
 
     let content = column![
         icon_container,
-        v_space(10.0),
+        v_space(8.0),
         text(name_display)
             .size(14)
             .color(name_color)
             .width(Length::Fill)
             .align_x(iced::Alignment::Center)
             .wrapping(Wrapping::None),
+        v_space(3.0),
+        text(hostname_display)
+            .size(12)
+            .color(mt::ON_SURFACE_VARIANT)
+            .width(Length::Fill)
+            .align_x(iced::Alignment::Center)
+            .wrapping(Wrapping::None),
+        v_space(1.0),
         text(address_display)
-            .size(11)
+            .size(12)
             .color(mt::ON_SURFACE_VARIANT)
             .width(Length::Fill)
             .align_x(iced::Alignment::Center)
             .wrapping(Wrapping::None),
     ]
-    .spacing(2)
+    .spacing(1)
     .width(Length::Fill)
     .align_x(iced::Alignment::Center);
 
     let inner = container(content)
-        .padding(16)
+        .padding(14)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
@@ -381,7 +391,7 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     let mut btn = button(icon_widget)
         .padding(0)
         .width(Length::Fixed(150.0))
-        .height(Length::Fixed(130.0))
+        .height(Length::Fixed(142.0))
         .style(move |_, status| {
             let base_bg = if selected { mt::PRIMARY_CONTAINER } else { mt::SURFACE };
             let bg = match status {
@@ -420,8 +430,11 @@ pub fn server_tile<'a, Message: 'a + Clone>(
     if name_truncated {
         tip_items.push(text(name.to_string()).size(13).color(mt::ON_SURFACE).into());
     }
+    if hostname_truncated {
+        tip_items.push(text(hostname.to_string()).size(11).color(mt::ON_SURFACE_VARIANT).into());
+    }
     if address_truncated {
-        tip_items.push(text(address.to_string()).size(11).color(mt::ON_SURFACE_VARIANT).into());
+        tip_items.push(text(address).size(11).color(mt::ON_SURFACE_VARIANT).into());
     }
     if encrypt {
         tip_items.push(

@@ -35,9 +35,36 @@ fn build_wayland_hotkey_stream(
         .map(|event| Message::Client(client::Message::HotkeyEvent(event)))
 }
 
+fn build_signal_stream(_: &()) -> impl Stream<Item = Message> + 'static {
+    iced::stream::channel(1, |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            tokio::select! {
+                _ = sigterm.recv() => {},
+                _ = sigint.recv() => {},
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        let _ = output.try_send(Message::ForceQuit);
+    })
+}
+
 async fn reconnect(
     host: String,
     port: u16,
+    addrs: Option<Vec<std::net::SocketAddr>>,
     client_require_auth: bool,
     passphrase: Option<String>,
     saved_phc: Option<String>,
@@ -46,7 +73,7 @@ async fn reconnect(
 ) -> Result<(crate::net::Sender, Option<String>), ()> {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        match crate::net::Sender::connect(&host, port, client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone()).await {
+        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone()).await {
             Ok(result) => return Ok(result),
             Err(_) => {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -68,6 +95,7 @@ pub enum Message {
     WindowOpened(iced::window::Id),
     WaylandHandlesReady(Option<WaylandHandles>),
     Quit,
+    ForceQuit,
     NoOp,
 }
 
@@ -172,6 +200,10 @@ impl Spud {
                 if is_connect {
                     let host = self.client.host().to_string();
                     let port = self.client.port().parse().unwrap_or(7878);
+                    let addrs: Option<Vec<std::net::SocketAddr>> = {
+                        let a = self.client.selected_addrs();
+                        if a.is_empty() { None } else { Some(a.to_vec()) }
+                    };
                     let client_require_auth = self.client.require_auth();
                     let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
                     let saved_phc = if client_require_auth {
@@ -183,7 +215,7 @@ impl Spud {
                     let client_encrypt = self.client.encrypt_udp();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host, port, client_encrypt, client_require_auth, passphrase, saved_phc).await
+                            crate::net::Sender::connect(&host, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc).await
                         },
                         |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
@@ -194,6 +226,10 @@ impl Spud {
                 if was_lost && self.client.is_reconnecting() {
                     let host = self.client.host().to_string();
                     let port = self.client.port().parse().unwrap_or(7878);
+                    let addrs: Option<Vec<std::net::SocketAddr>> = {
+                        let a = self.client.selected_addrs();
+                        if a.is_empty() { None } else { Some(a.to_vec()) }
+                    };
                     let gen = self.client.reconnect_generation();
                     let timeout = self.client.reconnect_timeout();
                     let client_require_auth = self.client.require_auth();
@@ -209,6 +245,7 @@ impl Spud {
                         reconnect(
                             host,
                             port,
+                            addrs,
                             client_require_auth,
                             passphrase,
                             saved_phc,
@@ -258,6 +295,9 @@ impl Spud {
                 self.wayland_handles = handles;
                 Task::none()
             }
+            Message::ForceQuit => {
+                return iced::exit();
+            }
             Message::Quit => {
                 let can_quit = if !self.client.is_connected() {
                     true
@@ -285,6 +325,7 @@ impl Spud {
 
         subs.push(Subscription::run_with((), build_discovery_stream));
         subs.push(Subscription::run_with((), build_net_events_stream));
+        subs.push(Subscription::run_with((), build_signal_stream));
 
         if self.client.is_connected() {
             subs.push(

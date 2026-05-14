@@ -115,35 +115,93 @@ impl ClientConnection {
     pub async fn connect(
         host: &str,
         port: u16,
+        addrs: Option<Vec<SocketAddr>>,
         client_encrypt: bool,
         client_require_auth: bool,
         passphrase: Option<String>,
         saved_phc: Option<String>,
     ) -> io::Result<(Self, Option<String>)> {
-        let addr = tokio::net::lookup_host(format!("{}:{}", host, port))
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses found"))?;
+        let addrs: Vec<SocketAddr> = match addrs {
+            Some(a) if !a.is_empty() => a,
+            _ => tokio::net::lookup_host(format!("{}:{}", host, port))
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+                .collect(),
+        };
 
-        // Determine if we have a trusted fingerprint
-        let fingerprint = config::load_known_servers()
-            .get(&format!("{}:{}", host, port))
+        if addrs.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "no addresses found"));
+        }
+
+        eprintln!("[spud] connect to {host}:{port} trying addresses: {addrs:?}");
+
+        // Determine if we have a trusted fingerprint.
+        // Check IP-based keys first (more specific), then hostname.
+        let known = config::load_known_servers();
+        let fingerprint = addrs
+            .iter()
+            .find_map(|a| known.get(&format!("{}:{}", a.ip(), port)))
+            .or_else(|| known.get(&format!("{}:{}", host, port)))
             .and_then(|s| hex::decode(s).ok())
             .and_then(|v| v.try_into().ok());
 
-        let tls = match fingerprint {
+        let server_name = rustls::pki_types::ServerName::try_from("spud.local")
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+        let (tls, addr) = match fingerprint {
             Some(fp) => {
                 let config = build_client_config(fp);
                 let connector = TlsConnector::from(config);
-                let server_name = rustls::pki_types::ServerName::try_from("spud.local")
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP connect timeout"))??;
-                tokio::time::timeout(Duration::from_secs(10), connector.connect(server_name.clone(), tcp))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS handshake timeout"))??
+                let mut last_err = None;
+                let mut connected = None;
+                for addr in &addrs {
+                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(*addr)).await {
+                        Ok(Ok(tcp)) => match tokio::time::timeout(
+                            Duration::from_secs(10),
+                            connector.connect(server_name.clone(), tcp),
+                        )
+                        .await
+                        {
+                            Ok(Ok(tls)) => {
+                                connected = Some((tls, *addr));
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                eprintln!("[spud] TLS handshake failed for {addr}: {e}");
+                                last_err = Some(e);
+                            }
+                            Err(_) => {
+                                eprintln!("[spud] TLS handshake timeout for {addr}");
+                                last_err = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "TLS handshake timeout",
+                                ));
+                            }
+                        },
+                        Ok(Err(e)) => {
+                            eprintln!("[spud] TCP connect failed for {addr}: {e}");
+                            last_err = Some(e);
+                        }
+                        Err(_) => {
+                            eprintln!("[spud] TCP connect timeout for {addr}");
+                            last_err = Some(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "TCP connect timeout",
+                            ));
+                        }
+                    }
+                }
+                match connected {
+                    Some((tls, addr)) => {
+                        eprintln!("[spud] connected via {addr} (trusted fingerprint)");
+                        (tls, addr)
+                    }
+                    None => {
+                        return Err(last_err.unwrap_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "no addresses found")
+                        }));
+                    }
+                }
             }
             None => {
                 // Probe to get fingerprint
@@ -155,33 +213,120 @@ impl ClientConnection {
                     .with_no_client_auth();
                 probe_config.dangerous().set_certificate_verifier(Arc::new(ProbeVerifier));
                 let connector = TlsConnector::from(Arc::new(probe_config));
-                let server_name = rustls::pki_types::ServerName::try_from("spud.local")
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP connect timeout"))??;
-                let tls = tokio::time::timeout(Duration::from_secs(10), connector.connect(server_name.clone(), tcp))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS handshake timeout"))??;
 
-                // Extract fingerprint
-                let (_, conn) = tls.get_ref();
-                let certs = conn.peer_certificates()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no peer certificates"))?;
-                let cert = certs.first()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "empty peer certificates"))?;
-                let fp = cert_fingerprint(cert);
-                config::trust_server(host, port, fp);
+                let mut last_err = None;
+                let mut probed_fp = None;
+                for addr in &addrs {
+                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(*addr)).await {
+                        Ok(Ok(tcp)) => match tokio::time::timeout(
+                            Duration::from_secs(10),
+                            connector.connect(server_name.clone(), tcp),
+                        )
+                        .await
+                        {
+                            Ok(Ok(tls)) => {
+                                eprintln!("[spud] probe succeeded for {addr}");
+                                let (_, conn) = tls.get_ref();
+                                let certs = conn.peer_certificates().ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "no peer certificates")
+                                })?;
+                                let cert = certs.first().ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "empty peer certificates")
+                                })?;
+                                let fp = cert_fingerprint(cert);
+                                config::trust_server(host, port, fp);
+                                config::trust_server(&addr.ip().to_string(), port, fp);
+                                probed_fp = Some(fp);
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                eprintln!("[spud] probe TLS failed for {addr}: {e}");
+                                last_err = Some(e);
+                            }
+                            Err(_) => {
+                                eprintln!("[spud] probe TLS timeout for {addr}");
+                                last_err = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "TLS handshake timeout",
+                                ));
+                            }
+                        },
+                        Ok(Err(e)) => {
+                            eprintln!("[spud] probe TCP failed for {addr}: {e}");
+                            last_err = Some(e);
+                        }
+                        Err(_) => {
+                            eprintln!("[spud] probe TCP timeout for {addr}");
+                            last_err = Some(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "TCP connect timeout",
+                            ));
+                        }
+                    }
+                }
+
+                let fp = match probed_fp {
+                    Some(fp) => fp,
+                    None => {
+                        return Err(last_err.unwrap_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "no addresses found")
+                        }));
+                    }
+                };
 
                 // Reconnect with trusted fingerprint
                 let config = build_client_config(fp);
                 let connector = TlsConnector::from(config);
-                let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(addr))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TCP connect timeout"))??;
-                tokio::time::timeout(Duration::from_secs(10), connector.connect(server_name.clone(), tcp))
-                    .await
-                    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS handshake timeout"))??
+                let mut last_err = None;
+                let mut connected = None;
+                for addr in &addrs {
+                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(*addr)).await {
+                        Ok(Ok(tcp)) => match tokio::time::timeout(
+                            Duration::from_secs(10),
+                            connector.connect(server_name.clone(), tcp),
+                        )
+                        .await
+                        {
+                            Ok(Ok(tls)) => {
+                                connected = Some((tls, *addr));
+                                break;
+                            }
+                            Ok(Err(e)) => {
+                                eprintln!("[spud] TLS handshake failed for {addr}: {e}");
+                                last_err = Some(e);
+                            }
+                            Err(_) => {
+                                eprintln!("[spud] TLS handshake timeout for {addr}");
+                                last_err = Some(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "TLS handshake timeout",
+                                ));
+                            }
+                        },
+                        Ok(Err(e)) => {
+                            eprintln!("[spud] TCP connect failed for {addr}: {e}");
+                            last_err = Some(e);
+                        }
+                        Err(_) => {
+                            eprintln!("[spud] TCP connect timeout for {addr}");
+                            last_err = Some(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "TCP connect timeout",
+                            ));
+                        }
+                    }
+                }
+                match connected {
+                    Some((tls, addr)) => {
+                        eprintln!("[spud] connected via {addr} (after probe)");
+                        (tls, addr)
+                    }
+                    None => {
+                        return Err(last_err.unwrap_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidInput, "no addresses found")
+                        }));
+                    }
+                }
             }
         };
 
