@@ -770,7 +770,7 @@ impl State {
             && self.port.parse::<u16>().is_ok_and(|p| p > 0);
 
         let action: Element<Message> = if is_active {
-            ui::outlined_button("Disconnect", Message::Disconnect)
+            ui::outlined_button("Disconnect", Some(Message::Disconnect))
         } else {
             ui::filled_button("Connect", (can_connect && !server_running).then_some(Message::Connect))
         };
@@ -955,7 +955,7 @@ impl State {
                 row![
                     text(&self.hotkey).size(14).color(mt::ON_SURFACE),
                     ui::h_space_fill(),
-                    ui::outlined_button("Record hotkey", Message::OpenHotkeyDialog),
+                    ui::outlined_button("Record hotkey", Some(Message::OpenHotkeyDialog)),
                 ]
                 .align_y(iced::Alignment::Center),
             ]
@@ -1043,7 +1043,7 @@ impl State {
                 ui::v_space(24.0),
                 row![
                     ui::h_space_fill(),
-                    ui::outlined_button("Cancel", Message::CloseHotkeyDialog),
+                    ui::outlined_button("Cancel", Some(Message::CloseHotkeyDialog)),
                     ui::h_space(8.0),
                     ui::filled_button(
                         "Use this hotkey",

@@ -363,7 +363,7 @@ impl State {
         let passphrase_missing = self.require_auth && self.passphrase.is_empty() && self.passphrase_hash.is_empty();
 
         let action: Element<Message> = if self.running {
-            ui::outlined_button("Stop server", Message::StopServer)
+            ui::outlined_button("Stop server", Some(Message::StopServer))
         } else {
             ui::filled_button("Start server", (!passphrase_missing && !client_connected).then_some(Message::StartServer))
         };
@@ -391,7 +391,7 @@ impl State {
         let action_row: Element<Message> = if self.settings_changed() {
             row![
                 ui::h_space_fill(),
-                ui::outlined_button("Stop server", Message::StopServer),
+                ui::outlined_button("Stop server", Some(Message::StopServer)),
                 ui::h_space(8.0),
                 ui::filled_button("Restart server", Some(Message::RestartServer)),
             ]

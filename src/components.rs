@@ -184,33 +184,52 @@ pub fn filled_button<'a, Message: 'a + Clone>(
 
 pub fn outlined_button<'a, Message: 'a + Clone>(
     label: &'a str,
-    on_press: Message,
+    on_press: Option<Message>,
 ) -> Element<'a, Message> {
-    button(
-        container(text(label).size(14).color(mt::ON_SURFACE_VARIANT))
+    let disabled = on_press.is_none();
+    let mut btn = button(
+        container(text(label).size(14).color(if disabled {
+            mt::with_alpha(mt::ON_SURFACE_VARIANT, 0.4)
+        } else {
+            mt::ON_SURFACE_VARIANT
+        }))
             .padding(Padding::from([10, 24])),
     )
-    .on_press(on_press)
     .padding(0)
-    .style(|_, status| {
-        let bg = match status {
-            button::Status::Hovered => mt::with_alpha(mt::ON_SURFACE, 0.06),
-            button::Status::Pressed => mt::with_alpha(mt::ON_SURFACE, 0.12),
-            _ => Color::TRANSPARENT,
+    .style(move |_, status| {
+        let bg = if disabled {
+            Color::TRANSPARENT
+        } else {
+            match status {
+                button::Status::Hovered => mt::with_alpha(mt::ON_SURFACE, 0.06),
+                button::Status::Pressed => mt::with_alpha(mt::ON_SURFACE, 0.12),
+                _ => Color::TRANSPARENT,
+            }
         };
         button::Style {
             background: Some(Background::Color(bg)),
-            text_color: mt::ON_SURFACE_VARIANT,
+            text_color: if disabled {
+                mt::with_alpha(mt::ON_SURFACE_VARIANT, 0.4)
+            } else {
+                mt::ON_SURFACE_VARIANT
+            },
             border: Border {
-                color: mt::OUTLINE,
+                color: if disabled {
+                    mt::with_alpha(mt::OUTLINE, 0.4)
+                } else {
+                    mt::OUTLINE
+                },
                 width: 1.0,
                 radius: 999.0.into(),
             },
             shadow: Shadow::default(),
             ..Default::default()
         }
-    })
-    .into()
+    });
+    if let Some(msg) = on_press {
+        btn = btn.on_press(msg);
+    }
+    btn.into()
 }
 
 pub fn pick_list<'a, T, L, V, Message>(

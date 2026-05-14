@@ -14,6 +14,18 @@ mod theme;
 mod views;
 
 fn main() -> iced::Result {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && args[1] == "injection-helper" {
+        let socket_path = args.get(2).cloned().unwrap_or_else(|| "/tmp/spud-input.sock".to_string());
+        let screen_width = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1920);
+        let screen_height = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1080);
+        if let Err(e) = input::helper::run(&socket_path, screen_width, screen_height) {
+            eprintln!("[spud-injection-helper] failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     if std::env::var("XDG_CURRENT_DESKTOP")
         .unwrap_or_default()
         .contains("COSMIC")

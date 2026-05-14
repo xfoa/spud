@@ -1,13 +1,13 @@
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use zeroize::Zeroize;
 
 use aes_gcm::aead::KeyInit;
 use aes_gcm::Aes256Gcm;
 use iced::futures::{SinkExt, StreamExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
@@ -21,6 +21,9 @@ use crate::session::{generate_session, SessionState, SessionTable};
 pub struct ServerListener {
     shutdown: Arc<tokio::sync::Notify>,
     handle: tokio::task::JoinHandle<()>,
+    cancel: CancellationToken,
+    #[cfg(target_os = "linux")]
+    helper_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl ServerListener {
@@ -37,30 +40,72 @@ impl ServerListener {
         let config = build_server_config(cert, key);
         let acceptor = TlsAcceptor::from(config);
 
-        let tcp = TcpListener::bind((addr, port)).await?;
+        let tcp_socket = TcpSocket::new_v4()?;
+        tcp_socket.set_reuseaddr(true)?;
+        let tcp_addr = std::net::SocketAddr::new(
+            addr.parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            port,
+        );
+        tcp_socket.bind(tcp_addr)?;
+        let tcp = tcp_socket.listen(128)?;
+
         let udp = UdpSocket::bind((addr, port)).await?;
 
         let shutdown = Arc::new(tokio::sync::Notify::new());
         let sessions: Arc<SessionTable> = Arc::new(SessionTable::new());
         let (screen_width, screen_height) = get_screen_size();
 
-        let s = shutdown.clone();
-        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height));
+        #[cfg(target_os = "linux")]
+        let helper_cancel: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        Ok(Self { shutdown, handle })
+        #[cfg(target_os = "linux")]
+        let injector: Arc<OnceLock<crate::input::InputInjector>> = Arc::new(OnceLock::new());
+        #[cfg(target_os = "linux")]
+        {
+            match try_direct_injector(screen_width, screen_height) {
+                Some(inj) => {
+                    let _ = injector.set(inj);
+                }
+                None => {
+                    eprintln!("[spud] Permission denied opening /dev/uinput. Starting privileged helper...");
+                    let slot = injector.clone();
+                    let cancel = helper_cancel.clone();
+                    let _ = spawn_helper_injector(screen_width, screen_height, slot, cancel);
+                }
+            }
+        }
+
+        let s = shutdown.clone();
+        let cancel = CancellationToken::new();
+        let c = cancel.clone();
+        #[cfg(target_os = "linux")]
+        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, injector, c));
+        #[cfg(not(target_os = "linux"))]
+        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, c));
+
+        Ok(Self {
+            shutdown,
+            handle,
+            cancel,
+            #[cfg(target_os = "linux")]
+            helper_cancel: Some(helper_cancel),
+        })
     }
 }
 
 impl Drop for ServerListener {
     fn drop(&mut self) {
-        self.shutdown.notify_waiters();
-        for _i in 1..100 {
-            if self.handle.is_finished() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(50));
+        #[cfg(target_os = "linux")]
+        if let Some(ref cancel) = self.helper_cancel {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+        self.cancel.cancel();
+        self.shutdown.notify_waiters();
         self.handle.abort();
+        // The tokio task will be dropped on the next runtime tick.
+        // We must not block here because this Drop may run on the tokio
+        // runtime thread, which would prevent the task from being polled
+        // and dropped.
     }
 }
 
@@ -79,19 +124,87 @@ fn get_screen_size() -> (u16, u16) {
 }
 
 #[cfg(target_os = "linux")]
-fn get_input_injector(screen_width: u16, screen_height: u16) -> Option<InputInjector> {
+fn try_direct_injector(screen_width: u16, screen_height: u16) -> Option<InputInjector> {
     match crate::input::InputInjector::new(screen_width, screen_height) {
         Ok(inj) => Some(inj),
         Err(e) => {
-            if e.kind() == io::ErrorKind::PermissionDenied {
-                eprintln!("[spud] Permission denied opening /dev/uinput.");
-            } else {
-                eprintln!("[spud] Failed to create input injector: {e}");
-            }
-            eprintln!("[spud] Input events will be logged only, not injected.");
+            eprintln!("[spud] Failed to create input injector: {e}");
             None
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_helper_injector(
+    screen_width: u16,
+    screen_height: u16,
+    slot: Arc<OnceLock<crate::input::InputInjector>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let socket_path = format!("/tmp/spud-input-{}.sock", std::process::id());
+        let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("spud"));
+        let exe_str = exe.to_string_lossy();
+        let mut child = match std::process::Command::new("pkexec")
+            .arg(&*exe_str)
+            .arg("injection-helper")
+            .arg(&socket_path)
+            .arg(screen_width.to_string())
+            .arg(screen_height.to_string())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[spud] Failed to spawn pkexec helper: {e}");
+                return;
+            }
+        };
+
+        let start = std::time::Instant::now();
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.try_wait();
+                return;
+            }
+
+            if let Ok(Some(status)) = child.try_wait() {
+                eprintln!("[spud] Helper exited early with status: {status}");
+                break;
+            }
+
+            if std::path::Path::new(&socket_path).exists() {
+                match crate::input::InputInjector::new_ipc(&socket_path) {
+                    Ok(mut inj) => {
+                        inj.helper = Some(child);
+                        eprintln!("[spud] Input injector created via privileged helper.");
+                        if let Err(_) = slot.set(inj) {
+                            eprintln!("[spud] Warning: injector slot already initialized");
+                        }
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("[spud] new_ipc retry failed: {e}");
+                    }
+                }
+            }
+
+            let elapsed = start.elapsed().as_secs();
+            if elapsed > 0 && elapsed % 5 == 0 {
+                eprintln!("[spud] Still waiting for privileged helper... ({elapsed}s elapsed)");
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        eprintln!("[spud] Failed to connect to helper.");
+        let _ = child.kill();
+        let _ = child.try_wait();
+        eprintln!("[spud] Input events will be logged only, not injected.");
+    })
 }
 
 async fn run_server(
@@ -106,11 +219,10 @@ async fn run_server(
     sessions: Arc<SessionTable>,
     screen_width: u16,
     screen_height: u16,
-) {
     #[cfg(target_os = "linux")]
-    let mut injector = get_input_injector(screen_width, screen_height);
-
-    let cancel = CancellationToken::new();
+    injector: Arc<OnceLock<crate::input::InputInjector>>,
+    cancel: CancellationToken,
+) {
     let mut buf = vec![0u8; 2048];
     let mut sweep_interval = tokio::time::interval(Duration::from_millis(200));
     loop {
@@ -139,7 +251,7 @@ async fn run_server(
                         println!("[server] (timeout): {action}");
                     }
                     #[cfg(target_os = "linux")]
-                    if let Some(ref mut inj) = injector {
+                    if let Some(inj) = injector.get() {
                         for action in &actions {
                             inj.inject_action(action);
                         }
@@ -194,7 +306,7 @@ async fn run_server(
                                         }
                                     }
                                     #[cfg(target_os = "linux")]
-                                    if let Some(ref mut inj) = injector {
+                                    if let Some(inj) = injector.get() {
                                         let is_localhost = src.ip().is_loopback();
                                         if !is_localhost {
                                             match &event {
@@ -241,6 +353,9 @@ async fn run_server(
                                     eprintln!("[spud] UDP too many failed decrypts for conn {conn_id}, removing session");
                                 }
                             }
+                        }
+                        else {
+                            eprintln!("[spud] UDP event for unknown session {conn_id}");
                         }
                         if should_remove {
                             sessions.remove(&conn_id);

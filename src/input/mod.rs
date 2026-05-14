@@ -1,9 +1,13 @@
 #[cfg(target_os = "linux")]
+pub mod helper;
+#[cfg(target_os = "linux")]
 mod inject;
+
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
 mod x11;
+
 
 #[cfg(target_os = "linux")]
 pub use inject::InputInjector;
@@ -89,7 +93,6 @@ pub fn toggle_wayland_grab() -> bool {
     false
 }
 
-#[cfg(target_os = "linux")]
 pub fn is_wayland_grabbed() -> bool {
     wayland::signal().is_grabbed()
 }

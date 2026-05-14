@@ -1,9 +1,11 @@
 use std::io;
+use std::io::Write;
 use std::sync::mpsc::{self, Sender as MpscSender};
 use std::thread::{self, JoinHandle};
 
 /// Commands sent to the injector worker thread.
-enum InjectCmd {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum InjectCmd {
     MouseAbs { x: i32, y: i32 },
     MouseRel { dx: i32, dy: i32 },
     KeyDown { code: u16 },
@@ -20,6 +22,7 @@ enum InjectCmd {
 pub struct InputInjector {
     tx: MpscSender<InjectCmd>,
     _handle: JoinHandle<()>,
+    pub helper: Option<std::process::Child>,
 }
 
 impl InputInjector {
@@ -108,46 +111,96 @@ impl InputInjector {
             println!("[spud] input injector thread exiting");
         });
 
-        Ok(Self { tx, _handle: handle })
+        Ok(Self { tx, _handle: handle, helper: None })
+    }
+
+    /// Create an injector that forwards events over a Unix socket to a
+    /// privileged helper process (e.g. started via pkexec).
+    pub fn new_ipc(socket_path: &str) -> io::Result<Self> {
+        let stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+        let (tx, rx) = mpsc::channel::<InjectCmd>();
+        let mut stream = stream;
+        let handle = thread::spawn(move || {
+            while let Ok(cmd) = rx.recv() {
+                let bytes = match postcard::to_allocvec(&cmd) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("[spud] IPC serialize error: {e}");
+                        break;
+                    }
+                };
+                let len = match u16::try_from(bytes.len()) {
+                    Ok(n) => n,
+                    Err(_) => {
+                        eprintln!("[spud] IPC command too large");
+                        break;
+                    }
+                };
+                if let Err(e) = stream.write_all(&len.to_le_bytes()) {
+                    eprintln!("[spud] IPC write error: {e}");
+                    break;
+                }
+                if let Err(e) = stream.write_all(&bytes) {
+                    eprintln!("[spud] IPC write error: {e}");
+                    break;
+                }
+            }
+            println!("[spud] IPC input injector thread exiting");
+        });
+        Ok(Self { tx, _handle: handle, helper: None })
     }
 
     /// Move the cursor to an absolute screen position (pixels).
     pub fn move_abs(&self, x: i32, y: i32) {
-        let _ = self.tx.send(InjectCmd::MouseAbs { x, y });
+        if let Err(e) = self.tx.send(InjectCmd::MouseAbs { x, y }) {
+            eprintln!("[spud] Inject move_abs failed: channel closed ({e})");
+        }
     }
 
     /// Move the cursor by a relative delta (pixels).
     pub fn move_rel(&self, dx: i32, dy: i32) {
-        let _ = self.tx.send(InjectCmd::MouseRel { dx, dy });
+        if let Err(e) = self.tx.send(InjectCmd::MouseRel { dx, dy }) {
+            eprintln!("[spud] Inject move_rel failed: channel closed ({e})");
+        }
     }
 
     /// Press a keyboard key by Linux evdev keycode.
     pub fn key_down(&self, code: u16) {
-        let _ = self.tx.send(InjectCmd::KeyDown { code });
+        if let Err(e) = self.tx.send(InjectCmd::KeyDown { code }) {
+            eprintln!("[spud] Inject key_down failed: channel closed ({e})");
+        }
     }
 
     /// Release a keyboard key by Linux evdev keycode.
     pub fn key_up(&self, code: u16) {
-        let _ = self.tx.send(InjectCmd::KeyUp { code });
+        if let Err(e) = self.tx.send(InjectCmd::KeyUp { code }) {
+            eprintln!("[spud] Inject key_up failed: channel closed ({e})");
+        }
     }
 
     /// Press a mouse button by Linux evdev button code.
     pub fn button_down(&self, code: u16) {
-        let _ = self.tx.send(InjectCmd::ButtonDown { code });
+        if let Err(e) = self.tx.send(InjectCmd::ButtonDown { code }) {
+            eprintln!("[spud] Inject button_down failed: channel closed ({e})");
+        }
     }
 
     /// Release a mouse button by Linux evdev button code.
     pub fn button_up(&self, code: u16) {
-        let _ = self.tx.send(InjectCmd::ButtonUp { code });
+        if let Err(e) = self.tx.send(InjectCmd::ButtonUp { code }) {
+            eprintln!("[spud] Inject button_up failed: channel closed ({e})");
+        }
     }
 
     /// Emit a mouse wheel event.
     pub fn wheel(&self, dx: i8, dy: i8) {
-        let _ = self.tx.send(InjectCmd::Wheel { dx, dy });
+        if let Err(e) = self.tx.send(InjectCmd::Wheel { dx, dy }) {
+            eprintln!("[spud] Inject wheel failed: channel closed ({e})");
+        }
     }
 
     /// Legacy action parser used by the key tracker for timeout releases.
-    pub fn inject_action(&mut self, action: &str) {
+    pub fn inject_action(&self, action: &str) {
         let action = action.trim();
         if let Some(rest) = action.strip_prefix("press ") {
             let name = rest.split(" (").next().unwrap_or(rest).trim();
@@ -168,13 +221,25 @@ impl InputInjector {
     }
 }
 
-fn create_evdev_device() -> io::Result<evdev::uinput::VirtualDevice> {
+impl Drop for InputInjector {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.helper.take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+pub fn create_evdev_device() -> io::Result<evdev::uinput::VirtualDevice> {
     let mut keys = evdev::AttributeSet::<evdev::KeyCode>::new();
-    for code in 0..=0x2ffu16 {
+    // Skip 0 (KEY_RESERVED) which can cause some display servers to ignore
+    // the device. Start from 1 to cover all real key/button codes.
+    for code in 1..=0x2ffu16 {
         keys.insert(evdev::KeyCode::new(code));
     }
 
     let mut rel_axes = evdev::AttributeSet::<evdev::RelativeAxisCode>::new();
+    rel_axes.insert(evdev::RelativeAxisCode::REL_X);
+    rel_axes.insert(evdev::RelativeAxisCode::REL_Y);
     rel_axes.insert(evdev::RelativeAxisCode::REL_WHEEL);
     rel_axes.insert(evdev::RelativeAxisCode::REL_HWHEEL);
 
@@ -185,7 +250,7 @@ fn create_evdev_device() -> io::Result<evdev::uinput::VirtualDevice> {
         .build()
 }
 
-fn emit_key(dev: &mut evdev::uinput::VirtualDevice, code: u16, value: i32) -> io::Result<()> {
+pub fn emit_key(dev: &mut evdev::uinput::VirtualDevice, code: u16, value: i32) -> io::Result<()> {
     use evdev::{EventType, InputEvent, KeyCode, SynchronizationCode};
     dev.emit(&[
         InputEvent::new_now(EventType::KEY.0, KeyCode::new(code).0, value),
@@ -193,7 +258,7 @@ fn emit_key(dev: &mut evdev::uinput::VirtualDevice, code: u16, value: i32) -> io
     ])
 }
 
-fn emit_wheel(dev: &mut evdev::uinput::VirtualDevice, dx: i8, dy: i8) -> io::Result<()> {
+pub fn emit_wheel(dev: &mut evdev::uinput::VirtualDevice, dx: i8, dy: i8) -> io::Result<()> {
     use evdev::{EventType, InputEvent, RelativeAxisCode, SynchronizationCode};
     let mut events = Vec::with_capacity(3);
     if dy != 0 {
