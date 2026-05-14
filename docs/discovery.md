@@ -21,12 +21,13 @@ same host do not collide. The `name` is the user-configured display name.
 
 Resolved service records carry the following TXT properties:
 
-| Property | Value                                          |
-|----------|------------------------------------------------|
-| `name`   | User-configured display name.                  |
-| `icon`   | One of `desktop`, `laptop`, `server`.          |
-| `auth`   | `true` if the server requires authentication.  |
-| `encrypt`| `true` if the server encrypts the UDP plane.   |
+| Property   | Value                                          |
+|------------|------------------------------------------------|
+| `name`     | User-configured display name.                  |
+| `hostname` | System hostname (used as fallback if `name` is missing). |
+| `icon`     | One of `desktop`, `laptop`, `server`.          |
+| `auth`     | `true` if the server requires authentication.  |
+| `encrypt`  | `true` if the server encrypts the UDP plane.   |
 
 The client reads these properties to populate the discovered-server grid
 (`DiscoveredServer`). The `icon` value is mapped to a FontAwesome glyph for
@@ -48,17 +49,17 @@ pub enum Event {
 `Lost` is emitted when a service is removed from the network. The client view
 maintains a `Vec<DiscoveredServer>` and applies these events directly:
 
-* `Found` — remove any existing entry with the same address, then insert and
+* `Found` — remove any existing entry with the same `fullname`, then insert and
   re-sort by name.
 * `Lost` — remove the entry whose `fullname` matches.
 
 ## Server registration
 
 `Registration` wraps an `mdns_sd` registration. It is created when the server
-starts and unregistered on `Drop`. The server uses
-`hostname.gethostname().local.` as the target host and calls
-`enable_addr_auto()` so the mDNS daemon automatically publishes the local IP
-addresses.
+starts and unregistered on `Drop`. To avoid A/AAAA record collisions across
+machines that share the same system hostname, the server uses the instance
+name (`{name}-{port}-{pid}`) as the target host and calls `enable_addr_auto()`
+so the mDNS daemon automatically publishes the local IP addresses.
 
 ## Same-machine filtering
 

@@ -66,7 +66,8 @@ pub enum ControlMsg {
     AuthChallenge { nonce: [u8; 32], salt: String },
     AuthResponse  { hmac: [u8; 32] },
     AuthResult    { ok: bool },
-    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, key_timeout_ms: u16 },
+    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, auth: bool, key_timeout_ms: u16, screen_width: u16, screen_height: u16 },
+    SetCaptureMode { window_mode: bool },
     Keepalive,
 }
 ```
@@ -82,8 +83,12 @@ session.
 * `uuid`: 128-bit session UUID (reserved for future use).
 * `encrypt`: the server's UDP encryption preference. The connection is aborted
   if this does not match the client's preference.
+* `auth`: `true` if the server required passphrase authentication for this
+  session.
 * `key_timeout_ms`: server key-release timeout in milliseconds. The client
   derives its key-repeat interval from this value (`key_timeout_ms / 2`).
+* `screen_width` / `screen_height`: server display dimensions in pixels. The
+  client uses these to scale absolute mouse coordinates.
 
 #### `Keepalive` (client -> server)
 
@@ -167,9 +172,11 @@ pub enum Event {
     KeyDown(String),
     KeyUp(String),
     MouseMove { dx: i16, dy: i16 },
+    MouseAbs { x: u16, y: u16 },
     MouseButton { button: u8, pressed: bool },
     Wheel { dx: i8, dy: i8 },
     KeyRepeat(String),
+    MouseButtonRepeat(u8),
     Keepalive,
 }
 ```
@@ -177,11 +184,17 @@ pub enum Event {
 * `KeyDown` / `KeyUp` / `KeyRepeat`: carry a UTF-8 key name (see
   [Key naming](#key-naming)).
 * `MouseMove`: relative deltas in pixels (`i16` each).
+* `MouseAbs`: absolute position normalised to `0..65535`. The server maps this
+  to its screen dimensions using `screen_width` / `screen_height` from
+  `SessionInit`.
 * `MouseButton`: `button` is an evdev-like code (`1`=left, `2`=middle,
   `3`=right, `8`=back, `9`=forward); `pressed` is `true` for down, `false` for
   up.
 * `Wheel`: discrete scroll deltas. Lines are passed through; pixel deltas are
   divided by 10. Both axes are clamped to `i8` range.
+* `KeyRepeat`: sent by the client over UDP as a heartbeat for held keys.
+* `MouseButtonRepeat`: sent by the client over UDP as a heartbeat for held
+  mouse buttons.
 * `Keepalive`: sent by the client over UDP as a lightweight liveness signal.
 
 Events from an unknown `ConnId` are silently dropped.
@@ -220,23 +233,28 @@ After processing a datagram, and after every idle wake of the recv loop
 recorded time is older than `key_timeout_ms` is released with
 `release name (timeout)` and removed.
 
-Currently the server only logs these actions; it does not synthesize input on
-the host. That comes later.
+On **Linux**, the server forwards these actions to the host input subsystem via
+`/dev/uinput`, either directly (if the user has permissions) or through a
+privileged helper process started via `pkexec`. See
+[spud-input-injector.md](spud-input-injector.md) for details.
 
 ## Client behavior
 
 ### Sending input
 
-The client maintains `pressed_keys: HashSet<String>`.
+The client maintains `pressed_keys: HashSet<String>` and
+`pressed_mouse_buttons: HashSet<u8>`.
 
-* On a native key press event, if the name is not already in the set, insert
-  it and send `KeyDown`. If it is already present (OS auto-repeat), the event
-  is suppressed.
+* On a native key press event, if the name is not already in `pressed_keys`,
+  insert it and send `KeyDown`. If it is already present (OS auto-repeat), the
+  event is suppressed.
 * On a native key release event, remove the name and send `KeyUp`.
+* Mouse buttons are deduplicated the same way using `pressed_mouse_buttons`.
 * Every `key_timeout_ms / 2` milliseconds while a session is active, send
-  `KeyRepeat` for every name in `pressed_keys`. This is the only source of
-  `KeyRepeat` traffic.
-* On `Disconnect` or `ConnectionLost`, clear `pressed_keys`.
+  `KeyRepeat` for every name in `pressed_keys` and `MouseButtonRepeat` for
+  every button in `pressed_mouse_buttons`. This is the only source of repeat
+  traffic.
+* On `Disconnect` or `ConnectionLost`, clear both sets.
 
 This keeps held-key traffic at roughly 2 packets per second per held key,
 regardless of OS auto-repeat rate, while the key repeat still allows one
@@ -244,12 +262,17 @@ dropped UDP datagram before the server times the key out.
 
 ### Mouse
 
-* In hotkey mode on Wayland, motion comes from the relative pointer protocol
-  via the dedicated input thread; the iced `CursorMoved` events are not used.
-* In focus mode, iced delivers absolute cursor positions, which the client
-  converts to deltas against the previous position. The first event after a
-  `CursorEntered` is suppressed because there is no prior reference.
-* Buttons and wheel events are translated directly.
+* In **hotkey mode** (fullscreen capture), motion comes from the relative
+  pointer protocol via the dedicated input thread on Wayland, or from delta
+  calculations against the previous position on X11. `MouseMove` events are
+  sent.
+* In **window mode** (focus capture), the client sends `MouseAbs` coordinates
+  normalised to `0..65535` based on the local window size.
+* The first `CursorMoved` after `CursorEntered` is suppressed when computing
+  deltas because there is no prior reference.
+* Buttons and wheel events are translated directly. Wheel deltas from the
+  hotkey backend are negated to match the window-mode convention before
+  natural-scroll is applied.
 
 ## Versioning
 

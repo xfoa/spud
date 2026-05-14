@@ -34,7 +34,7 @@ sequenceDiagram
         C->>S: AuthResponse { hmac }
         S->>C: AuthResult { ok: true }
     end
-    S->>C: SessionInit { encrypt: true }
+    S->>C: SessionInit { encrypt, auth, key_timeout_ms, screen_width, screen_height }
     par Key export (client)
         C->>C: export_keying_material("spud/udp/keys/v1")
         C->>C: HKDF-SHA256 -> client_write key
@@ -233,6 +233,10 @@ pub struct SessionState {
     pub src_addr: SocketAddr,            // last known UDP source
     pub encrypt: bool,                   // negotiated setting
     pub failed_decrypts: u32,            // consecutive decrypt failures
+    pub tracker: KeyTracker,             // held-key state machine
+    pub screen_width: u16,               // server display width
+    pub screen_height: u16,              // server display height
+    pub window_mode: bool,               // capture mode (window vs fullscreen)
 }
 ```
 

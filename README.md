@@ -34,6 +34,22 @@ There already exist tools that solve similar problems to Spud, so why not use th
 Binaries are available from the GitHub project [releases](https://github.com/xfoa/spud/releases) page.
 Put them wherever your system expects to find binaries.
 
+On **Linux**, the server can install input events via a privileged helper that
+runs through `pkexec`. To avoid typing your password every time the server
+starts, install the polkit rule:
+
+```bash
+sudo install -Dm644 resources/50-spud-injection.rules \
+    /etc/polkit-1/rules.d/50-spud-injection.rules
+```
+
+Alternatively, run the provided install script which also builds and installs
+the binary and desktop entry:
+
+```bash
+./install.sh
+```
+
 ## Build
 
 You can build this project using:
