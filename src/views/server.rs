@@ -402,7 +402,11 @@ impl State {
             row![ui::h_space_fill(), action].width(Length::Fill).into()
         };
 
-        let mut col_items: Vec<Element<Message>> = vec![status_row.into()];
+        let mut col_items: Vec<Element<Message>> = vec![
+            ui::card_title("Server Status").into(),
+            ui::v_space(12.0).into(),
+            status_row.into(),
+        ];
 
         if self.running {
             col_items.push(ui::v_space(8.0).into());
@@ -515,7 +519,14 @@ impl State {
         .spacing(0);
 
         ui::card(
-            column![name_field, ui::v_space(16.0), icon_section].spacing(0),
+            column![
+                ui::card_title("Identity"),
+                ui::v_space(12.0),
+                name_field,
+                ui::v_space(16.0),
+                icon_section,
+            ]
+            .spacing(0),
         )
     }
 
@@ -543,13 +554,20 @@ impl State {
         .spacing(6);
 
         let bind_card = ui::card(
-            column![bind_field, ui::v_space(16.0), port_field].spacing(0),
+            column![
+                ui::card_title("Binding"),
+                ui::v_space(12.0),
+                bind_field,
+                ui::v_space(16.0),
+                port_field,
+            ]
+            .spacing(0),
         );
 
         let discovery_card = ui::card(
             row![
                 column![
-                    text("LAN discovery").size(16).color(mt::ON_SURFACE),
+                    ui::card_title("LAN discovery"),
                     ui::v_space(2.0),
                     ui::helper_text(
                         "Advertise this server over mDNS so clients can find it."
@@ -637,19 +655,31 @@ impl State {
             }
         }
 
-        let auth_card = ui::card(column(auth_items).spacing(0));
+        let auth_card = ui::card(
+            column![
+                ui::card_title("Authentication"),
+                ui::v_space(12.0),
+                column(auth_items).spacing(0),
+            ]
+            .spacing(0),
+        );
 
         let encrypt_card = ui::card(
-            row![
-                column![
-                    text("Require encryption").size(16).color(mt::ON_SURFACE),
-                    ui::v_space(2.0),
-                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
+            column![
+                ui::card_title("Encryption"),
+                ui::v_space(12.0),
+                row![
+                    column![
+                        text("Require encryption").size(16).color(mt::ON_SURFACE),
+                        ui::v_space(2.0),
+                        ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
+                    ]
+                    .width(Length::Fill),
+                    checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
                 ]
-                .width(Length::Fill),
-                checkbox(self.encrypt_udp).on_toggle(Message::EncryptUdpToggled),
+                .align_y(iced::Alignment::Center),
             ]
-            .align_y(iced::Alignment::Center),
+            .spacing(0),
         );
 
         let body = column![auth_card, ui::v_space(16.0), encrypt_card].spacing(0);
@@ -666,16 +696,23 @@ impl State {
         .align_y(iced::Alignment::Center);
 
         let timeout_field = column![
-            ui::field_label("Key timeout"),
+            ui::field_label("Key hold timeout"),
             slider_row,
             ui::v_space(4.0),
             ui::helper_text(
-                "Compensates for lost packets. Lower values are better for less reliable network conditions."
+                "Compensates for lost release event packets. Lower values are better for less reliable network conditions."
             ),
         ]
         .spacing(6);
 
-        let timeout_card = ui::card(timeout_field);
+        let timeout_card = ui::card(
+            column![
+                ui::card_title("Performance"),
+                ui::v_space(12.0),
+                timeout_field,
+            ]
+            .spacing(0),
+        );
         let body = column![timeout_card].spacing(0);
         ui::page_body("Advanced", body)
     }

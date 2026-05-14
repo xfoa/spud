@@ -237,6 +237,7 @@ impl ClientConnection {
         passphrase: Option<String>,
         saved_phc: Option<String>,
         override_fingerprint: Option<[u8; 32]>,
+        max_batch: u8,
     ) -> Result<(Self, Option<String>), ConnectError> {
         let addrs: Vec<SocketAddr> = match addrs {
             Some(a) if !a.is_empty() => a,
@@ -381,9 +382,9 @@ impl ClientConnection {
         let encrypt_clone = encrypt;
         let cipher_clone = cipher.clone();
         tokio::spawn(async move {
-            const MAX_BATCH: usize = 8;
+            let max_batch = max_batch.max(1) as usize;
             const BATCH_TIMEOUT_MS: u64 = 1;
-            let mut batch: Vec<Event> = Vec::with_capacity(MAX_BATCH);
+            let mut batch: Vec<Event> = Vec::with_capacity(max_batch);
             let flush_deadline = tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS));
             tokio::pin!(flush_deadline);
 
@@ -391,7 +392,7 @@ impl ClientConnection {
                 tokio::select! {
                     Some(event) = udp_rx.recv() => {
                         batch.push(event);
-                        if batch.len() >= MAX_BATCH {
+                        if batch.len() >= max_batch {
                             send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                             batch.clear();
                             flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));

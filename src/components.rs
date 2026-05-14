@@ -558,6 +558,17 @@ pub fn section_title<'a, Message: 'a>(label: &'a str) -> Element<'a, Message> {
     text(label).size(22).color(mt::ON_SURFACE).into()
 }
 
+pub fn card_title<'a, Message: 'a>(label: &'a str) -> Element<'a, Message> {
+    text(label)
+        .size(18)
+        .font(Font {
+           weight: font::Weight::Medium,
+           ..Font::default()
+        })
+        .color(mt::ON_SURFACE)
+        .into()
+}
+
 pub fn field_label<'a, Message: 'a>(label: &'a str) -> Element<'a, Message> {
     text(label).size(13).color(mt::ON_SURFACE_VARIANT).into()
 }

@@ -130,6 +130,9 @@ pub struct ClientConfig {
     pub blank_screen: bool,
     pub show_hotkey_on_blank: bool,
     pub encrypt_udp: bool,
+    pub mouse_batch_size: u8,
+    pub batch_redundancy: u8,
+    pub udp_drop_percent: u8,
 }
 
 impl Default for ClientConfig {
@@ -148,6 +151,9 @@ impl Default for ClientConfig {
             blank_screen: false,
             show_hotkey_on_blank: true,
             encrypt_udp: true,
+            mouse_batch_size: 8,
+            batch_redundancy: 0,
+            udp_drop_percent: 0,
         }
     }
 }

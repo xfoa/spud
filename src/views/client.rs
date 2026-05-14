@@ -85,6 +85,9 @@ pub enum Message {
     BlankScreenToggled(bool),
     ShowHotkeyOnBlankToggled(bool),
     EncryptUdpToggled(bool),
+    MouseBatchSizeChanged(u8),
+    BatchRedundancyChanged(u8),
+    UdpDropPercentChanged(u8),
     WindowSizeChanged(iced::Size),
     FingerprintMismatch { host: String, port: u16, new_fingerprint: [u8; 32] },
     FingerprintDialogCancel,
@@ -125,6 +128,9 @@ pub struct State {
     reconnect_timeout_secs: String,
     blank_screen: bool,
     show_hotkey_on_blank: bool,
+    mouse_batch_size: u8,
+    batch_redundancy: u8,
+    udp_drop_percent: u8,
     grabbed: bool,
     /// User's explicit intent to capture. Persists even if the backend
     /// loses the grab unexpectedly (e.g. COSMIC pointer constraint bugs).
@@ -183,6 +189,9 @@ impl State {
             reconnect_timeout_secs: cfg.reconnect_timeout_secs.to_string(),
             blank_screen: cfg.blank_screen,
             show_hotkey_on_blank: cfg.show_hotkey_on_blank,
+            mouse_batch_size: cfg.mouse_batch_size,
+            batch_redundancy: cfg.batch_redundancy,
+            udp_drop_percent: cfg.udp_drop_percent,
             grabbed: false,
             user_capturing: false,
             encrypt_udp: cfg.encrypt_udp,
@@ -206,6 +215,9 @@ impl State {
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
             blank_screen: self.blank_screen,
             show_hotkey_on_blank: self.show_hotkey_on_blank,
+            mouse_batch_size: self.mouse_batch_size,
+            batch_redundancy: self.batch_redundancy,
+            udp_drop_percent: self.udp_drop_percent,
             encrypt_udp: self.encrypt_udp,
         }
     }
@@ -553,6 +565,9 @@ impl State {
             Message::BlankScreenToggled(v) => self.blank_screen = v,
             Message::ShowHotkeyOnBlankToggled(v) => self.show_hotkey_on_blank = v,
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
+            Message::MouseBatchSizeChanged(v) => self.mouse_batch_size = v,
+            Message::BatchRedundancyChanged(v) => self.batch_redundancy = v,
+            Message::UdpDropPercentChanged(v) => self.udp_drop_percent = v,
         }
     }
 
@@ -680,6 +695,18 @@ impl State {
 
     pub fn encrypt_udp(&self) -> bool {
         self.encrypt_udp
+    }
+
+    pub fn mouse_batch_size(&self) -> u8 {
+        self.mouse_batch_size
+    }
+
+    pub fn batch_redundancy(&self) -> u8 {
+        self.batch_redundancy
+    }
+
+    pub fn udp_drop_percent(&self) -> u8 {
+        self.udp_drop_percent
     }
 
     pub fn nav_items(&self, about_active: bool) -> Vec<Element<'_, Message>> {
@@ -866,7 +893,12 @@ impl State {
         conn_items.push(ui::v_space(20.0).into());
         conn_items.push(row![ui::h_space_fill(), action].width(Length::Fill).into());
 
-        let connection_card = ui::card(column(conn_items).spacing(0));
+        let mut conn_items_with_title: Vec<Element<Message>> = vec![
+            ui::card_title("Connection").into(),
+            ui::v_space(12.0).into(),
+        ];
+        conn_items_with_title.extend(conn_items);
+        let connection_card = ui::card(column(conn_items_with_title).spacing(0));
 
         let discovery_card = self.discovery_card(content_width);
 
@@ -913,7 +945,7 @@ impl State {
 
         ui::card(
             column![
-                text("Discovered servers").size(16).color(mt::ON_SURFACE),
+                ui::card_title("Discovered servers"),
                 ui::v_space(4.0),
                 ui::helper_text("Tap a server to fill in the connection details."),
                 ui::v_space(16.0),
@@ -926,7 +958,7 @@ impl State {
     fn input_page(&self) -> Element<'_, Message> {
         let sens_card = ui::card(
             column![
-                text("Mouse sensitivity").size(16).color(mt::ON_SURFACE),
+                ui::card_title("Mouse sensitivity"),
                 ui::v_space(4.0),
                 ui::helper_text(
                     "Multiplier applied to relative mouse movement before sending."
@@ -948,6 +980,8 @@ impl State {
 
         let scroll_card = ui::card(
             column![
+                ui::card_title("Scrolling"),
+                ui::v_space(12.0),
                 row![
                     column![
                         text("Natural scroll direction").size(16).color(mt::ON_SURFACE),
@@ -973,7 +1007,7 @@ impl State {
     fn hotkeys_page(&self) -> Element<'_, Message> {
         let capture_card = ui::card(
             column![
-                text("Capture mode").size(16).color(mt::ON_SURFACE),
+                ui::card_title("Capture mode"),
                 ui::v_space(4.0),
                 ui::helper_text("Decide when input is captured and forwarded."),
                 ui::v_space(16.0),
@@ -990,7 +1024,7 @@ impl State {
 
         let hotkey_card = ui::card(
             column![
-                text("Capture hotkey").size(16).color(mt::ON_SURFACE),
+                ui::card_title("Capture hotkey"),
                 ui::v_space(4.0),
                 ui::helper_text("Press this combo to toggle input capture."),
                 ui::v_space(16.0),
@@ -1028,12 +1062,26 @@ impl State {
             .align_y(iced::Alignment::Center);
 
             if self.blank_screen {
-                ui::card(column![blank_screen_row, ui::v_space(16.0), show_hotkey_row].spacing(0))
+                ui::card(column![
+                    ui::card_title("Blank screen"),
+                    ui::v_space(12.0),
+                    blank_screen_row,
+                    ui::v_space(16.0),
+                    show_hotkey_row,
+                ].spacing(0))
             } else {
-                ui::card(column![blank_screen_row].spacing(0))
+                ui::card(column![
+                    ui::card_title("Blank screen"),
+                    ui::v_space(12.0),
+                    blank_screen_row,
+                ].spacing(0))
             }
         } else {
-            ui::card(column![show_hotkey_row].spacing(0))
+            ui::card(column![
+                ui::card_title("Blank screen"),
+                ui::v_space(12.0),
+                show_hotkey_row,
+            ].spacing(0))
         };
 
         body_items.push(ui::v_space(16.0).into());
@@ -1390,26 +1438,36 @@ impl State {
             }
         }
 
-        let auth_card = ui::card(column(auth_items).spacing(0));
+        let mut auth_items_with_title: Vec<Element<Message>> = vec![
+            ui::card_title("Authentication").into(),
+            ui::v_space(12.0).into(),
+        ];
+        auth_items_with_title.extend(auth_items);
+        let auth_card = ui::card(column(auth_items_with_title).spacing(0));
 
         let encrypt_card = ui::card(
-            row![
-                column![
-                    text("Require encryption").size(16).color(mt::ON_SURFACE),
-                    ui::v_space(2.0),
-                    ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
-                ]
-                .width(Length::Fill),
-                {
-                    let cb = checkbox(self.encrypt_udp);
-                    if !self.connected {
-                        cb.on_toggle(Message::EncryptUdpToggled)
-                    } else {
-                        cb
+            column![
+                ui::card_title("Encryption"),
+                ui::v_space(12.0),
+                row![
+                    column![
+                        text("Require encryption").size(16).color(mt::ON_SURFACE),
+                        ui::v_space(2.0),
+                        ui::helper_text("Encrypt input events sent over the network. Disabling this is less secure, but reduces latency."),
+                    ]
+                    .width(Length::Fill),
+                    {
+                        let cb = checkbox(self.encrypt_udp);
+                        if !self.connected {
+                            cb.on_toggle(Message::EncryptUdpToggled)
+                        } else {
+                            cb
+                        }
                     }
-                }
+                ]
+                .align_y(iced::Alignment::Center),
             ]
-            .align_y(iced::Alignment::Center),
+            .spacing(0),
         );
 
         let body = column![auth_card, ui::v_space(16.0), encrypt_card].spacing(0);
@@ -1426,34 +1484,117 @@ impl State {
         .align_y(iced::Alignment::Center);
 
         let keepalive_field = column![
-            ui::field_label("Keepalive interval"),
-            slider_row,
+            text("Keepalive interval").size(16).color(mt::ON_SURFACE),
             ui::v_space(4.0),
-            ui::helper_text("A low setting is good for latency on some wireless networks."),
+            ui::helper_text("A low setting may improve latency on some wireless networks, but sends more traffic."),
+            ui::v_space(16.0),
+            slider_row,
         ]
-        .spacing(6);
+        .spacing(0);
 
         let timeout_field = column![
-            ui::field_label("Reconnect timeout (seconds)"),
+            text("Reconnect timeout").size(16).color(mt::ON_SURFACE),
+            ui::v_space(4.0),
+            ui::helper_text("How long to keep trying to reconnect after the server drops."),
+            ui::v_space(16.0),
             text_input("30", &self.reconnect_timeout_secs)
                 .on_input(Message::ReconnectTimeoutChanged)
                 .padding(12)
                 .size(14)
                 .width(Length::Fixed(140.0)),
-            ui::v_space(4.0),
-            ui::helper_text("How long to keep trying to reconnect after the server drops."),
         ]
-        .spacing(6);
+        .spacing(0);
 
-        let advanced_card = ui::card(
+        let batch_size_row = row![
+            slider(1..=20, self.mouse_batch_size, Message::MouseBatchSizeChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{}", self.mouse_batch_size)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let batch_size_field = column![
+            text("Mouse event max batch size").size(16).color(mt::ON_SURFACE),
+            ui::v_space(4.0),
+            ui::helper_text("Higher decreases UDP overhead but may cause slight lag at lower pointer speeds."),
+            ui::v_space(16.0),
+            batch_size_row,
+        ]
+        .spacing(0);
+
+        let batch_redundancy_row = row![
+            slider(0..=10, self.batch_redundancy, Message::BatchRedundancyChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{}", self.batch_redundancy)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let batch_redundancy_field = column![
+            text("Redundant batches").size(16).color(mt::ON_SURFACE),
+            ui::v_space(4.0),
+            ui::helper_text("Include previously sent batches in each UDP packet to improve reliablity at the cost of latency."),
+            ui::v_space(16.0),
+            batch_redundancy_row,
+        ]
+        .spacing(0);
+
+        let drop_row = row![
+            slider(0..=100, self.udp_drop_percent, Message::UdpDropPercentChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{}%", self.udp_drop_percent)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let drop_field = column![
+            text("UDP drop rate").size(16).color(mt::ON_SURFACE),
+            ui::v_space(4.0),
+            ui::helper_text("Percentage of UDP packets to drop for testing reliability."),
+            ui::v_space(16.0),
+            drop_row,
+        ]
+        .spacing(0);
+
+        let network_card = ui::card(
             column![
-                keepalive_field,
-                ui::v_space(16.0),
+                ui::card_title("Network"),
+                ui::v_space(12.0),
                 timeout_field,
             ]
             .spacing(0),
         );
-        let body = column![advanced_card].spacing(0);
+
+        let perf_card = ui::card(
+            column![
+                ui::card_title("Performance"),
+                ui::v_space(12.0),
+                keepalive_field,
+                ui::v_space(16.0),
+                batch_size_field,
+                ui::v_space(16.0),
+                batch_redundancy_field,
+            ]
+            .spacing(0),
+        );
+
+        let testing_card = ui::card(
+            column![
+                ui::card_title("Testing"),
+                ui::v_space(12.0),
+                drop_field,
+            ]
+            .spacing(0),
+        );
+
+        let body = column![
+            network_card,
+            ui::v_space(16.0),
+            perf_card,
+            ui::v_space(16.0),
+            testing_card,
+        ]
+        .spacing(0);
         ui::page_body("Advanced", body)
     }
 }
