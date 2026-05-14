@@ -8,7 +8,7 @@ echo "[install] Installing binary to /usr/local/bin/spud"
 sudo install -Dm755 target/release/spud /usr/local/bin/spud
 
 echo "[install] Installing polkit rules for auth caching"
-sudo install -Dm644 resources/50-spud-injection.rules /etc/polkit-1/rules.d/50-spud-injection.rules
+sudo install -Dm644 resources/50-spud-injection.pkla /etc/polkit-1/localauthority/50-local.d/50-spud-injection.pkla
 
 echo "[install] Installing desktop entry"
 sudo install -Dm644 resources/spud.desktop /usr/share/applications/spud.desktop

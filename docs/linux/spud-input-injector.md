@@ -80,17 +80,15 @@ Then log out and back in.
 ## Polkit authentication caching
 
 By default `pkexec` asks for the root password every time the server starts.
-To cache the authorization for the rest of the session, install the provided
-polkit rule:
+To skip the password prompt, install the provided polkit rule:
 
 ```bash
-sudo install -Dm644 resources/50-spud-injection.rules \
-    /etc/polkit-1/rules.d/50-spud-injection.rules
+sudo install -Dm644 resources/50-spud-injection.pkla \
+    /etc/polkit-1/localauthority/50-local.d/50-spud-injection.pkla
 ```
 
-This returns `AUTH_ADMIN_KEEP` for any `pkexec` invocation whose command line
-contains both `spud` and `injection-helper`, so you only need to authenticate
-once per desktop session.
+This returns `yes` for `pkexec` invocations by active local users in the
+`sudo` group, so no password prompt is shown.
 
 ## Socket path
 

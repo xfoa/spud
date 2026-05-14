@@ -39,8 +39,8 @@ runs through `pkexec`. To avoid typing your password every time the server
 starts, install the polkit rule:
 
 ```bash
-sudo install -Dm644 resources/50-spud-injection.rules \
-    /etc/polkit-1/rules.d/50-spud-injection.rules
+sudo install -Dm644 resources/50-spud-injection.pkla \
+    /etc/polkit-1/localauthority/50-local.d/50-spud-injection.pkla
 ```
 
 Alternatively, run the provided install script which also builds and installs

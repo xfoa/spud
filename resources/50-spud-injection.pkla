@@ -1,0 +1,6 @@
+[Spud input injection helper]
+Identity=unix-group:sudo
+Action=org.freedesktop.policykit.exec
+ResultActive=yes
+ResultInactive=auth_admin
+ResultAny=auth_admin

@@ -1,8 +1,0 @@
-polkit.addRule(function(action, subject) {
-    if (action.id === "org.freedesktop.policykit.exec" &&
-        action.lookup("command_line") !== undefined &&
-        action.lookup("command_line").indexOf("injection-helper") >= 0 &&
-        action.lookup("command_line").indexOf("spud") >= 0) {
-        return polkit.Result.AUTH_ADMIN_KEEP;
-    }
-});
