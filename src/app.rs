@@ -79,8 +79,9 @@ async fn reconnect(
         if cancel.load(Ordering::Relaxed) {
             return Err(());
         }
-        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone()).await {
+        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone(), None).await {
             Ok(result) => return Ok(result),
+            Err(crate::net::client::ConnectError::FingerprintMismatch(_)) => return Err(()),
             Err(_) => {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
@@ -202,6 +203,12 @@ impl Spud {
                 }
                 let is_connect = matches!(msg, client::Message::Connect);
                 let was_lost = matches!(msg, client::Message::ConnectionLost);
+                let fp_allow = if let client::Message::FingerprintDialogAllowOnce { host, port, new_fingerprint } = &msg {
+                    Some((host.clone(), *port, *new_fingerprint))
+                } else { None };
+                let fp_trust = if let client::Message::FingerprintDialogTrust { host, port, new_fingerprint } = &msg {
+                    Some((host.clone(), *port, *new_fingerprint))
+                } else { None };
                 self.client.update(msg);
                 if is_connect {
                     let host = self.client.host().to_string();
@@ -219,12 +226,73 @@ impl Spud {
                         None
                     };
                     let client_encrypt = self.client.encrypt_udp();
+                    let host2 = host.clone();
                     return Task::perform(
                         async move {
-                            crate::net::Sender::connect(&host, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc).await
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None).await
                         },
-                        |result| match result {
+                        move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
+                            Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
+                                Message::Client(client::Message::FingerprintMismatch { host: host.clone(), port, new_fingerprint: fp })
+                            }
+                            Err(e) => Message::Client(client::Message::ConnectFailed(format!("{e}"))),
+                        },
+                    );
+                }
+                if let Some((host, port, fp)) = fp_allow {
+                    let addrs: Option<Vec<std::net::SocketAddr>> = {
+                        let a = self.client.selected_addrs();
+                        if a.is_empty() { None } else { Some(a.to_vec()) }
+                    };
+                    let client_require_auth = self.client.require_auth();
+                    let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
+                    let saved_phc = if client_require_auth {
+                        let phc = self.client.passphrase_hash().to_string();
+                        if phc.is_empty() { None } else { Some(phc) }
+                    } else {
+                        None
+                    };
+                    let client_encrypt = self.client.encrypt_udp();
+                    let host2 = host.clone();
+                    return Task::perform(
+                        async move {
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, Some(fp)).await
+                        },
+                        move |result| match result {
+                            Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
+                            Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
+                                Message::Client(client::Message::FingerprintMismatch { host: host.clone(), port, new_fingerprint: fp })
+                            }
+                            Err(e) => Message::Client(client::Message::ConnectFailed(format!("{e}"))),
+                        },
+                    );
+                }
+                if let Some((host, port, fp)) = fp_trust {
+                    crate::config::trust_server(&host, port, fp);
+                    let addrs: Option<Vec<std::net::SocketAddr>> = {
+                        let a = self.client.selected_addrs();
+                        if a.is_empty() { None } else { Some(a.to_vec()) }
+                    };
+                    let client_require_auth = self.client.require_auth();
+                    let passphrase = self.client.connection_passphrase().map(|s| s.to_string());
+                    let saved_phc = if client_require_auth {
+                        let phc = self.client.passphrase_hash().to_string();
+                        if phc.is_empty() { None } else { Some(phc) }
+                    } else {
+                        None
+                    };
+                    let client_encrypt = self.client.encrypt_udp();
+                    let host2 = host.clone();
+                    return Task::perform(
+                        async move {
+                            crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None).await
+                        },
+                        move |result| match result {
+                            Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
+                            Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
+                                Message::Client(client::Message::FingerprintMismatch { host: host.clone(), port, new_fingerprint: fp })
+                            }
                             Err(e) => Message::Client(client::Message::ConnectFailed(format!("{e}"))),
                         },
                     );
@@ -564,6 +632,10 @@ impl Spud {
         layers.push(handle_overlay.into());
 
         if let Some(dialog) = self.client.hotkey_dialog().map(|d| d.map(Message::Client)) {
+            layers.push(dialog);
+        }
+
+        if let Some(dialog) = self.client.fingerprint_dialog().map(|d| d.map(Message::Client)) {
             layers.push(dialog);
         }
 

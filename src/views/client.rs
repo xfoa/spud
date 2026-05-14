@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use iced::keyboard::{Key, Modifiers};
-use iced::widget::{checkbox, column, container, row, slider, text, text_input};
+use iced::widget::{checkbox, column, container, mouse_area, row, slider, text, text_input};
 use iced::{Background, Border, Color, Element, Length, Padding, Point, Shadow, Vector};
 
 use crate::components as ui;
@@ -86,6 +86,11 @@ pub enum Message {
     ShowHotkeyOnBlankToggled(bool),
     EncryptUdpToggled(bool),
     WindowSizeChanged(iced::Size),
+    FingerprintMismatch { host: String, port: u16, new_fingerprint: [u8; 32] },
+    FingerprintDialogCancel,
+    FingerprintDialogAllowOnce { host: String, port: u16, new_fingerprint: [u8; 32] },
+    FingerprintDialogTrust { host: String, port: u16, new_fingerprint: [u8; 32] },
+    FingerprintDialogToggleFingerprint,
 }
 
 pub struct State {
@@ -127,6 +132,15 @@ pub struct State {
     encrypt_udp: bool,
     server_screen_size: Option<(u16, u16)>,
     window_size: Option<iced::Size>,
+    fingerprint_dialog: Option<FingerprintDialogState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FingerprintDialogState {
+    host: String,
+    port: u16,
+    new_fingerprint: [u8; 32],
+    show_fingerprint: bool,
 }
 
 impl Default for State {
@@ -174,6 +188,7 @@ impl State {
             encrypt_udp: cfg.encrypt_udp,
             server_screen_size: None,
             window_size: None,
+            fingerprint_dialog: None,
         }
     }
 
@@ -261,6 +276,33 @@ impl State {
             Message::ConnectFailed(e) => {
                 self.last_error = Some(e);
                 self.connecting = false;
+            }
+            Message::FingerprintMismatch { host, port, new_fingerprint } => {
+                self.connecting = false;
+                self.fingerprint_dialog = Some(FingerprintDialogState {
+                    host,
+                    port,
+                    new_fingerprint,
+                    show_fingerprint: false,
+                });
+            }
+            Message::FingerprintDialogToggleFingerprint => {
+                if let Some(ref mut d) = self.fingerprint_dialog {
+                    d.show_fingerprint = !d.show_fingerprint;
+                }
+            }
+            Message::FingerprintDialogCancel => {
+                self.fingerprint_dialog = None;
+            }
+            Message::FingerprintDialogAllowOnce { .. } => {
+                self.fingerprint_dialog = None;
+                self.connecting = true;
+                self.last_error = None;
+            }
+            Message::FingerprintDialogTrust { .. } => {
+                self.fingerprint_dialog = None;
+                self.connecting = true;
+                self.last_error = None;
             }
             Message::Disconnect => {
                 self.connected = false;
@@ -1070,15 +1112,203 @@ impl State {
             ..Default::default()
         });
 
-        let backdrop = container(dialog)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(|_| container::Style {
-                background: Some(Background::Color(mt::with_alpha(Color::BLACK, 0.45))),
+        let backdrop = mouse_area(
+            container(dialog)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(mt::with_alpha(Color::BLACK, 0.45))),
+                    ..Default::default()
+                }),
+        )
+        .interaction(iced::mouse::Interaction::Idle);
+
+        Some(backdrop.into())
+    }
+
+    pub fn fingerprint_dialog(&self) -> Option<Element<'_, Message>> {
+        let state = self.fingerprint_dialog.as_ref()?;
+        let new_fp = hex::encode(&state.new_fingerprint);
+        let host = state.host.clone();
+        let port = state.port;
+
+        // Format fingerprint into groups of 8 hex chars, 4 groups per line
+        let formatted_fp: String = new_fp
+            .as_bytes()
+            .chunks(8)
+            .enumerate()
+            .map(|(i, chunk)| {
+                let s = std::str::from_utf8(chunk).unwrap();
+                if i > 0 && i % 4 == 0 {
+                    format!("\n{s}")
+                } else if i > 0 {
+                    format!(" {s}")
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect();
+
+        let mut content = column![
+            row![
+                text(icons::TRIANGLE_EXCLAMATION)
+                    .font(icons::FA_SOLID)
+                    .size(20)
+                    .color(mt::WARNING),
+                ui::h_space(8.0),
+                text("Server identity changed").size(18).color(mt::ON_SURFACE),
+            ]
+            .align_y(iced::Alignment::Center),
+            ui::v_space(6.0),
+            text(format!(
+                "The computer at {host}:{port} has a different security key than last time."
+            ))
+            .size(14)
+            .color(mt::ON_SURFACE_VARIANT),
+            ui::v_space(8.0),
+            text("This usually means the server was reinstalled or updated. If you did not expect this, someone else may be trying to impersonate that computer.")
+                .size(14)
+                .color(mt::ON_SURFACE_VARIANT),
+            ui::v_space(16.0),
+            mouse_area(
+                row![
+                    text(if state.show_fingerprint {
+                        icons::ANGLE_DOWN
+                    } else {
+                        icons::ANGLE_RIGHT
+                    })
+                    .font(icons::FA_SOLID)
+                    .size(12)
+                    .color(mt::ON_SURFACE_VARIANT),
+                    ui::h_space(6.0),
+                    text(if state.show_fingerprint {
+                        "Hide nerd stuff"
+                    } else {
+                        "Show nerd stuff"
+                    })
+                    .size(12)
+                    .color(mt::ON_SURFACE_VARIANT),
+                ]
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(Message::FingerprintDialogToggleFingerprint),
+        ]
+        .spacing(0);
+
+        if state.show_fingerprint {
+            let known = crate::config::load_known_servers();
+            let key = format!("{host}:{port}");
+            if let Some(known_fp) = known.get(&key) {
+                let formatted_known: String = known_fp
+                    .as_bytes()
+                    .chunks(8)
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        let s = std::str::from_utf8(chunk).unwrap();
+                        if i > 0 && i % 4 == 0 {
+                            format!("\n{s}")
+                        } else if i > 0 {
+                            format!(" {s}")
+                        } else {
+                            s.to_string()
+                        }
+                    })
+                    .collect();
+                content = content.push(ui::v_space(8.0)).push(
+                    ui::helper_text("Known fingerprint:")
+                ).push(ui::v_space(4.0)).push(
+                    container(
+                        text(formatted_known)
+                            .size(12)
+                            .font(iced::Font::MONOSPACE)
+                            .color(mt::ON_SURFACE_VARIANT),
+                    )
+                    .width(Length::Fill)
+                    .padding(Padding::from([12, 16]))
+                    .style(|_| container::Style {
+                        background: Some(Background::Color(mt::with_alpha(mt::PRIMARY, 0.06))),
+                        border: Border {
+                            color: mt::OUTLINE_VARIANT,
+                            width: 1.0,
+                            radius: 8.0.into(),
+                        },
+                        ..Default::default()
+                    }),
+                );
+            }
+            content = content.push(ui::v_space(8.0)).push(
+                ui::helper_text("New fingerprint:")
+            ).push(ui::v_space(4.0)).push(
+                container(
+                    text(formatted_fp)
+                        .size(12)
+                        .font(iced::Font::MONOSPACE)
+                        .color(mt::ON_SURFACE_VARIANT),
+                )
+                .width(Length::Fill)
+                .padding(Padding::from([12, 16]))
+                .style(|_| container::Style {
+                    background: Some(Background::Color(mt::with_alpha(mt::PRIMARY, 0.06))),
+                    border: Border {
+                        color: mt::OUTLINE_VARIANT,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                }),
+            );
+        }
+
+        content = content.push(ui::v_space(24.0)).push(
+            row![
+                ui::outlined_button("Don't connect", Some(Message::FingerprintDialogCancel)),
+                ui::h_space(8.0),
+                ui::outlined_button("Connect once", Some(Message::FingerprintDialogAllowOnce {
+                    host: host.clone(),
+                    port,
+                    new_fingerprint: state.new_fingerprint,
+                })),
+                ui::h_space(8.0),
+                ui::filled_button("Trust and connect", Some(Message::FingerprintDialogTrust {
+                    host: host.clone(),
+                    port,
+                    new_fingerprint: state.new_fingerprint,
+                })),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+        let dialog = container(content)
+        .width(Length::Fixed(540.0))
+        .padding(Padding::from(28))
+        .style(|_| container::Style {
+            background: Some(Background::Color(mt::SURFACE)),
+            border: Border {
+                radius: 16.0.into(),
                 ..Default::default()
-            });
+            },
+            shadow: Shadow {
+                color: mt::with_alpha(Color::BLACK, 0.3),
+                offset: Vector::new(0.0, 8.0),
+                blur_radius: 32.0,
+            },
+            ..Default::default()
+        });
+
+        let backdrop = mouse_area(
+            container(dialog)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(mt::with_alpha(Color::BLACK, 0.45))),
+                    ..Default::default()
+                }),
+        )
+        .interaction(iced::mouse::Interaction::Idle);
 
         Some(backdrop.into())
     }

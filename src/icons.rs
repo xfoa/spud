@@ -24,3 +24,5 @@ pub const LAPTOP: char = '\u{f109}';
 pub const SERVER: char = '\u{f233}';
 pub const GEAR: char = '\u{f013}';
 pub const ROTATE: char = '\u{f2f9}';
+pub const ANGLE_RIGHT: char = '\u{f105}';
+pub const ANGLE_DOWN: char = '\u{f107}';
