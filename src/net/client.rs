@@ -1,6 +1,6 @@
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use zeroize::Zeroize;
@@ -152,6 +152,7 @@ pub struct ClientConnection {
     pub screen_size: Option<(u16, u16)>,
     tcp_tx: mpsc::UnboundedSender<ControlMsg>,
     cipher: Option<Aes256Gcm>,
+    udp_drop: Arc<AtomicU8>,
 }
 
 impl std::fmt::Debug for ClientConnection {
@@ -176,6 +177,7 @@ impl Clone for ClientConnection {
             screen_size: self.screen_size,
             tcp_tx: self.tcp_tx.clone(),
             cipher: self.cipher.clone(),
+            udp_drop: self.udp_drop.clone(),
         }
     }
 }
@@ -382,6 +384,8 @@ impl ClientConnection {
         let conn_id_clone = conn_id;
         let encrypt_clone = encrypt;
         let cipher_clone = cipher.clone();
+        let udp_drop = Arc::new(AtomicU8::new(udp_drop_percent));
+        let udp_drop_clone = udp_drop.clone();
         tokio::spawn(async move {
             let max_batch = max_batch.max(1) as usize;
             const BATCH_TIMEOUT_MS: u64 = 1;
@@ -390,11 +394,12 @@ impl ClientConnection {
             tokio::pin!(flush_deadline);
 
             loop {
+                let drop_pct = udp_drop_clone.load(Ordering::Relaxed);
                 tokio::select! {
                     Some(event) = udp_rx.recv() => {
                         batch.push(event);
                         if batch.len() >= max_batch {
-                            if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                            if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
                                 send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                             }
                             batch.clear();
@@ -403,7 +408,7 @@ impl ClientConnection {
                     }
                     _ = &mut flush_deadline => {
                         if !batch.is_empty() {
-                            if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                            if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
                                 send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                             }
                             batch.clear();
@@ -415,8 +420,9 @@ impl ClientConnection {
             }
 
             // Flush any remaining events on shutdown
+            let drop_pct = udp_drop_clone.load(Ordering::Relaxed);
             if !batch.is_empty() {
-                if udp_drop_percent == 0 || fastrand::u8(0..100) >= udp_drop_percent {
+                if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
                     send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                 }
             }
@@ -468,6 +474,7 @@ impl ClientConnection {
             last_salt: phc_to_save.clone(),
             screen_size: Some((screen_width, screen_height)),
             cipher,
+            udp_drop,
         }, phc_to_save))
     }
 
@@ -579,6 +586,10 @@ impl ClientConnection {
 
     pub fn send_control(&self, msg: ControlMsg) {
         let _ = self.tcp_tx.send(msg);
+    }
+
+    pub fn set_udp_drop_percent(&self, percent: u8) {
+        self.udp_drop.store(percent.min(100), Ordering::Relaxed);
     }
 }
 

@@ -567,7 +567,12 @@ impl State {
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
             Message::MouseBatchSizeChanged(v) => self.mouse_batch_size = v,
             Message::BatchRedundancyChanged(v) => self.batch_redundancy = v,
-            Message::UdpDropPercentChanged(v) => self.udp_drop_percent = v,
+            Message::UdpDropPercentChanged(v) => {
+                self.udp_drop_percent = v;
+                if let Some(sender) = &self.sender {
+                    sender.set_udp_drop_percent(v);
+                }
+            }
         }
     }
 
@@ -863,6 +868,26 @@ impl State {
                         .size(13)
                         .color(mt::WARNING),
                     text("Stop the server before connecting as a client.")
+                        .size(13)
+                        .color(mt::WARNING),
+                ]
+                .spacing(8)
+                .align_y(iced::Alignment::Center)
+                .into(),
+            );
+        }
+
+        if self.udp_drop_percent > 0 {
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(ui::divider().into());
+            conn_items.push(ui::v_space(12.0).into());
+            conn_items.push(
+                row![
+                    text(icons::TRIANGLE_EXCLAMATION)
+                        .font(icons::FA_SOLID)
+                        .size(13)
+                        .color(mt::WARNING),
+                    text(format!("Dropping {}% of UDP packets for testing.", self.udp_drop_percent))
                         .size(13)
                         .color(mt::WARNING),
                 ]

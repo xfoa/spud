@@ -234,7 +234,7 @@ impl Spud {
                     return Task::perform(
                         async move {
                             crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch, udp_drop_percent).await
-                        }
+                        },
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
@@ -264,7 +264,7 @@ impl Spud {
                     return Task::perform(
                         async move {
                             crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, Some(fp), max_batch, udp_drop_percent).await
-                        }
+                        },
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
@@ -295,7 +295,7 @@ impl Spud {
                     return Task::perform(
                         async move {
                             crate::net::Sender::connect(&host2, port, addrs, client_encrypt, client_require_auth, passphrase, saved_phc, None, max_batch, udp_drop_percent).await
-                        }
+                        },
                         move |result| match result {
                             Ok((sender, phc)) => Message::Client(client::Message::ConnectSuccess(sender, phc)),
                             Err(crate::net::client::ConnectError::FingerprintMismatch(fp)) => {
