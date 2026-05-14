@@ -151,45 +151,71 @@ and sends `SessionInit` immediately after the TLS handshake.
 
 ## UDP input plane
 
-Each datagram carries exactly one event. There is no length prefix or framing
-beyond the UDP boundary itself.
+Each datagram carries a **batch** of up to 8 events. Batching amortises the
+fixed UDP/IP header overhead (28 bytes) and `ConnId` prefix across multiple
+events, which is critical for high-frequency traffic like mouse movement.
+
+The client buffers events for up to 1 ms or until 8 events accumulate,
+whichever comes first.
 
 ### Plaintext datagram layout
 
 ```mermaid
 packet-beta
-title UDP datagram header (plaintext)
+title UDP datagram (plaintext)
 0-63: "ConnId (u64 LE)"
+64-71: "Count (u8)"
+72-111: "Event 0 (5 bytes)"
+112-151: "Event 1 (5 bytes)"
+...: "..."
 ```
 
-Postcard-serialized `Event` follows, variable length. It is bounded by the
-server's receive buffer (2048 bytes) and the UDP payload limit (~65 KB).
+### Encrypted datagram layout
 
-The payload after `ConnId` is a `postcard` encoding of the `Event` enum:
-
-```rust
-pub enum Event {
-    KeyDown(String),
-    KeyUp(String),
-    MouseMove { dx: i16, dy: i16 },
-    MouseAbs { x: u16, y: u16 },
-    MouseButton { button: u8, pressed: bool },
-    Wheel { dx: i8, dy: i8 },
-    KeyRepeat(String),
-    MouseButtonRepeat(u8),
-    Keepalive,
-}
+```mermaid
+packet-beta
+title UDP datagram (encrypted)
+0-63: "ConnId (u64 LE)"
+64-127: "Sequence (u64 LE)"
+128-255: "Nonce (12 bytes)"
+256-...: "AES-256-GCM ciphertext"
 ```
 
-* `KeyDown` / `KeyUp` / `KeyRepeat`: carry a UTF-8 key name (see
-  [Key naming](#key-naming)).
+The ciphertext decrypts to the same batch payload as the plaintext format:
+`[count: u8][events...]`.
+
+### Compact event encoding
+
+Each event is exactly **5 bytes** (fixed-size for simple parsing):
+
+```
+[tag: u8][data0: u8][data1: u8][data2: u8][data3: u8]
+```
+
+| Tag | Event | Data layout |
+|-----|-------|-------------|
+| `0x01` | `KeyDown` | `u16` evdev scancode |
+| `0x02` | `KeyUp` | `u16` evdev scancode |
+| `0x03` | `KeyRepeat` | `u16` evdev scancode |
+| `0x04` | `MouseMove` | `i16 dx`, `i16 dy` |
+| `0x05` | `MouseAbs` | `u16 x`, `u16 y` |
+| `0x06` | `MouseButton` | `u8 button` in bits 0-6, `pressed` in bit 7 (1 = down, 0 = up) |
+| `0x07` | `MouseButtonRepeat` | `u8 button` |
+| `0x08` | `Wheel` | `i8 dx`, `i8 dy` |
+| `0x09` | `Keepalive` | unused |
+
+All multi-byte fields are little-endian. Unused trailing bytes are zero.
+
+### Event semantics
+
+* `KeyDown` / `KeyUp` / `KeyRepeat`: carry a `u16` Linux evdev scancode
+  (see [Key encoding](#key-encoding)).
 * `MouseMove`: relative deltas in pixels (`i16` each).
 * `MouseAbs`: absolute position normalised to `0..65535`. The server maps this
   to its screen dimensions using `screen_width` / `screen_height` from
   `SessionInit`.
 * `MouseButton`: `button` is an evdev-like code (`1`=left, `2`=middle,
-  `3`=right, `8`=back, `9`=forward); `pressed` is `true` for down, `false` for
-  up.
+  `3`=right, `8`=back, `9`=forward); `pressed` is `1` for down, `0` for up.
 * `Wheel`: discrete scroll deltas. Lines are passed through; pixel deltas are
   divided by 10. Both axes are clamped to `i8` range.
 * `KeyRepeat`: sent by the client over UDP as a heartbeat for held keys.
@@ -199,23 +225,24 @@ pub enum Event {
 
 Events from an unknown `ConnId` are silently dropped.
 
-## Key naming
+## Key encoding
 
-Keys are transmitted as opaque UTF-8 strings. The client picks a name based on
-how the event was sourced:
+Keys are transmitted as raw **Linux evdev scancodes** (`u16`), not strings.
+The client maps physical keys to scancodes using a platform-specific table:
 
-* iced character keys: the character text (`"a"`, `"A"`, `"/"`).
-* iced named keys: the debug name of the `iced::keyboard::key::Named` variant
-  (`"Shift"`, `"ArrowLeft"`, `"F1"`, `"Backspace"`).
-* Wayland / X11 backend keys: `"evdev:<keycode>"` where `<keycode>` is the
-  raw evdev numeric code.
+* On Linux, the raw scancode from the OS is used directly (or offset by 8 for
+  X11 keycodes).
+* For logical `Key::Named` fallbacks (rare), a fixed mapping table translates
+  common named keys to their evdev equivalents.
+* For `Key::Character` fallbacks (very rare), a US-QWERTY assumption is used.
 
-The server treats the strings as opaque identifiers; it does not try to
-interpret them.
+The server receives the `u16` scancode and passes it straight to the Linux
+input subsystem (`/dev/uinput` or the privileged helper), so no string parsing
+is required on the hot path.
 
 ## Server key state machine
 
-The server maintains a single `HashMap<String, Instant>` of keys that are
+The server maintains a single `HashMap<u16, Instant>` of keys that are
 currently considered held. On each datagram and on each idle tick of the recv
 loop, it runs the rules below and prints the resulting actions.
 

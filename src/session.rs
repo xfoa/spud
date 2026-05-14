@@ -11,6 +11,132 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 use crate::crypto::ReplayWindow;
 use crate::net::Event;
 
+/// Return a human-readable name for an evdev scancode.
+fn evdev_name(code: u16) -> String {
+    // Reverse of the logical mapping in input::inject::parse_key_name.
+    let name = match code {
+        1 => "Escape",
+        2 => "Digit1",
+        3 => "Digit2",
+        4 => "Digit3",
+        5 => "Digit4",
+        6 => "Digit5",
+        7 => "Digit6",
+        8 => "Digit7",
+        9 => "Digit8",
+        10 => "Digit9",
+        11 => "Digit0",
+        12 => "Minus",
+        13 => "Equal",
+        14 => "Backspace",
+        15 => "Tab",
+        16 => "KeyQ",
+        17 => "KeyW",
+        18 => "KeyE",
+        19 => "KeyR",
+        20 => "KeyT",
+        21 => "KeyY",
+        22 => "KeyU",
+        23 => "KeyI",
+        24 => "KeyO",
+        25 => "KeyP",
+        26 => "BracketLeft",
+        27 => "BracketRight",
+        28 => "Enter",
+        29 => "ControlLeft",
+        30 => "KeyA",
+        31 => "KeyS",
+        32 => "KeyD",
+        33 => "KeyF",
+        34 => "KeyG",
+        35 => "KeyH",
+        36 => "KeyJ",
+        37 => "KeyK",
+        38 => "KeyL",
+        39 => "Semicolon",
+        40 => "Quote",
+        41 => "Backquote",
+        42 => "ShiftLeft",
+        43 => "Backslash",
+        44 => "KeyZ",
+        45 => "KeyX",
+        46 => "KeyC",
+        47 => "KeyV",
+        48 => "KeyB",
+        49 => "KeyN",
+        50 => "KeyM",
+        51 => "Comma",
+        52 => "Period",
+        53 => "Slash",
+        54 => "ShiftRight",
+        55 => "NumpadMultiply",
+        56 => "AltLeft",
+        57 => "Space",
+        58 => "CapsLock",
+        59 => "F1",
+        60 => "F2",
+        61 => "F3",
+        62 => "F4",
+        63 => "F5",
+        64 => "F6",
+        65 => "F7",
+        66 => "F8",
+        67 => "F9",
+        68 => "F10",
+        69 => "NumLock",
+        70 => "ScrollLock",
+        71 => "Numpad7",
+        72 => "Numpad8",
+        73 => "Numpad9",
+        74 => "NumpadSubtract",
+        75 => "Numpad4",
+        76 => "Numpad5",
+        77 => "Numpad6",
+        78 => "NumpadAdd",
+        79 => "Numpad1",
+        80 => "Numpad2",
+        81 => "Numpad3",
+        82 => "Numpad0",
+        83 => "NumpadDecimal",
+        86 => "IntlBackslash",
+        87 => "F11",
+        88 => "F12",
+        89 => "IntlRo",
+        92 => "Convert",
+        93 => "KanaMode",
+        94 => "NonConvert",
+        96 => "NumpadEnter",
+        97 => "ControlRight",
+        98 => "NumpadDivide",
+        99 => "PrintScreen",
+        100 => "AltRight",
+        102 => "Home",
+        103 => "ArrowUp",
+        104 => "PageUp",
+        105 => "ArrowLeft",
+        106 => "ArrowRight",
+        107 => "End",
+        108 => "ArrowDown",
+        109 => "PageDown",
+        110 => "Insert",
+        111 => "Delete",
+        119 => "Pause",
+        125 => "SuperLeft",
+        126 => "SuperRight",
+        127 => "ContextMenu",
+        138 => "Help",
+        122 => "Lang1",
+        123 => "Lang2",
+        90 => "Lang3",
+        91 => "Lang4",
+        85 => "Lang5",
+        121 => "NumpadComma",
+        117 => "NumpadEqual",
+        _ => return format!("evdev:{code}"),
+    };
+    name.to_string()
+}
+
 pub type SessionUuid = [u8; 16];
 pub type ConnId = u64;
 
@@ -39,7 +165,7 @@ const MAX_FAILED_DECRYPTS: u32 = 10;
 
 /// Tracks held keys and mouse buttons, releasing them on timeout.
 pub struct KeyTracker {
-    keys: HashMap<String, Instant>,
+    keys: HashMap<u16, Instant>,
     mouse_buttons: HashMap<u8, Instant>,
     timeout: Duration,
 }
@@ -56,26 +182,29 @@ impl KeyTracker {
     /// Process a single event and return any actions taken.
     pub fn handle_event(&mut self, event: &Event) -> Vec<String> {
         match event {
-            Event::KeyDown(name) => {
+            Event::KeyDown(code) => {
                 let mut actions = Vec::new();
-                if self.keys.contains_key(name) {
+                let name = evdev_name(*code);
+                if self.keys.contains_key(code) {
                     actions.push(format!("release {name} (lost up)"));
                 }
                 actions.push(format!("press {name}"));
-                self.keys.insert(name.clone(), Instant::now());
+                self.keys.insert(*code, Instant::now());
                 actions
             }
-            Event::KeyRepeat(name) => {
-                if self.keys.contains_key(name) {
-                    self.keys.insert(name.clone(), Instant::now());
+            Event::KeyRepeat(code) => {
+                let name = evdev_name(*code);
+                if self.keys.contains_key(code) {
+                    self.keys.insert(*code, Instant::now());
                     vec![format!("repeat {name}")]
                 } else {
-                    self.keys.insert(name.clone(), Instant::now());
+                    self.keys.insert(*code, Instant::now());
                     vec![format!("press {name} (repeat without prior down)")]
                 }
             }
-            Event::KeyUp(name) => {
-                if self.keys.remove(name).is_some() {
+            Event::KeyUp(code) => {
+                let name = evdev_name(*code);
+                if self.keys.remove(code).is_some() {
                     vec![format!("release {name}")]
                 } else {
                     Vec::new()
@@ -114,9 +243,9 @@ impl KeyTracker {
     pub fn sweep(&mut self) -> Vec<String> {
         let now = Instant::now();
         let mut expired = Vec::new();
-        self.keys.retain(|name, last| {
+        self.keys.retain(|code, last| {
             if now.duration_since(*last) > self.timeout {
-                expired.push(format!("release {name} (timeout)"));
+                expired.push(format!("release {} (timeout)", evdev_name(*code)));
                 false
             } else {
                 true

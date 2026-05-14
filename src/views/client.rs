@@ -116,7 +116,7 @@ pub struct State {
     sender: Option<crate::net::Sender>,
     last_cursor: Option<Point>,
     last_error: Option<String>,
-    pressed_keys: HashSet<String>,
+    pressed_keys: HashSet<u16>,
     pressed_mouse_buttons: HashSet<u8>,
     keyrepeat_interval_ms: u64,
     reconnecting: bool,
@@ -529,8 +529,8 @@ impl State {
             }
             Message::KeyRepeatTick => {
                 if let Some(sender) = &self.sender {
-                    for name in &self.pressed_keys {
-                        sender.send(&crate::net::Event::KeyRepeat(name.clone()));
+                    for code in &self.pressed_keys {
+                        sender.send(&crate::net::Event::KeyRepeat(*code));
                     }
                     for button in &self.pressed_mouse_buttons {
                         sender.send(&crate::net::Event::MouseButtonRepeat(*button));
@@ -1461,7 +1461,7 @@ impl State {
 fn iced_to_wire(
     event: &iced::Event,
     last_cursor: &mut Option<Point>,
-    pressed_keys: &mut HashSet<String>,
+    pressed_keys: &mut HashSet<u16>,
     pressed_mouse_buttons: &mut HashSet<u8>,
     scale: (f32, f32),
     window_size: Option<iced::Size>,
@@ -1473,19 +1473,19 @@ fn iced_to_wire(
 
     match event {
         iced::Event::Keyboard(keyboard::Event::KeyPressed { key, physical_key, .. }) => {
-            let name = physical_key_to_name(physical_key)
-                .unwrap_or_else(|| key_to_string(key));
-            if pressed_keys.insert(name.clone()) {
-                Some(crate::net::Event::KeyDown(name))
+            let code = physical_key_to_evdev(physical_key)
+                .or_else(|| key_to_evdev(key))?;
+            if pressed_keys.insert(code) {
+                Some(crate::net::Event::KeyDown(code))
             } else {
                 None
             }
         }
         iced::Event::Keyboard(keyboard::Event::KeyReleased { key, physical_key, .. }) => {
-            let name = physical_key_to_name(physical_key)
-                .unwrap_or_else(|| key_to_string(key));
-            pressed_keys.remove(&name);
-            Some(crate::net::Event::KeyUp(name))
+            let code = physical_key_to_evdev(physical_key)
+                .or_else(|| key_to_evdev(key))?;
+            pressed_keys.remove(&code);
+            Some(crate::net::Event::KeyUp(code))
         }
         iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
             if is_window_mode {
@@ -1549,7 +1549,7 @@ fn iced_to_wire(
 
 fn input_event_to_wire(
     event: &crate::input::InputEvent,
-    pressed_keys: &mut HashSet<String>,
+    pressed_keys: &mut HashSet<u16>,
     pressed_mouse_buttons: &mut HashSet<u8>,
     sensitivity: f32,
     natural_scroll: bool,
@@ -1558,19 +1558,17 @@ fn input_event_to_wire(
     match event {
         InputEvent::KeyPress { keycode } => {
             // X11 keycodes are offset by 8 from Linux evdev scancodes.
-            let evdev = keycode.saturating_sub(8);
-            let name = format!("evdev:{evdev}");
-            if pressed_keys.insert(name.clone()) {
-                Some(crate::net::Event::KeyDown(name))
+            let code = keycode.saturating_sub(8) as u16;
+            if pressed_keys.insert(code) {
+                Some(crate::net::Event::KeyDown(code))
             } else {
                 None
             }
         }
         InputEvent::KeyRelease { keycode } => {
-            let evdev = keycode.saturating_sub(8);
-            let name = format!("evdev:{evdev}");
-            pressed_keys.remove(&name);
-            Some(crate::net::Event::KeyUp(name))
+            let code = keycode.saturating_sub(8) as u16;
+            pressed_keys.remove(&code);
+            Some(crate::net::Event::KeyUp(code))
         }
         InputEvent::MouseMove { dx, dy } => Some(crate::net::Event::MouseMove {
             dx: ((*dx as f32) * sensitivity).round() as i16,
@@ -1600,26 +1598,148 @@ fn input_event_to_wire(
     }
 }
 
-fn key_to_string(key: &Key) -> String {
+/// Map a logical `Key` to an evdev scancode (fallback when physical key is unknown).
+fn key_to_evdev(key: &Key) -> Option<u16> {
     match key {
-        Key::Character(s) => s.to_string(),
-        Key::Named(n) => format!("{n:?}"),
-        Key::Unidentified => "Unidentified".to_string(),
+        Key::Character(s) => char_to_evdev(s.chars().next()?),
+        Key::Named(n) => named_key_to_evdev(n),
+        Key::Unidentified => None,
     }
 }
 
-/// Convert a physical key to an evdev key name (`evdev:N`).
+fn char_to_evdev(c: char) -> Option<u16> {
+    Some(match c {
+        'a' | 'A' => 30,
+        'b' | 'B' => 48,
+        'c' | 'C' => 46,
+        'd' | 'D' => 32,
+        'e' | 'E' => 18,
+        'f' | 'F' => 33,
+        'g' | 'G' => 34,
+        'h' | 'H' => 35,
+        'i' | 'I' => 23,
+        'j' | 'J' => 36,
+        'k' | 'K' => 37,
+        'l' | 'L' => 38,
+        'm' | 'M' => 50,
+        'n' | 'N' => 49,
+        'o' | 'O' => 24,
+        'p' | 'P' => 25,
+        'q' | 'Q' => 16,
+        'r' | 'R' => 19,
+        's' | 'S' => 31,
+        't' | 'T' => 20,
+        'u' | 'U' => 22,
+        'v' | 'V' => 47,
+        'w' | 'W' => 17,
+        'x' | 'X' => 45,
+        'y' | 'Y' => 21,
+        'z' | 'Z' => 44,
+        '1' | '!' => 2,
+        '2' | '@' => 3,
+        '3' | '#' => 4,
+        '4' | '$' => 5,
+        '5' | '%' => 6,
+        '6' | '^' => 7,
+        '7' | '&' => 8,
+        '8' | '*' => 9,
+        '9' | '(' => 10,
+        '0' | ')' => 11,
+        '-' | '_' => 12,
+        '=' | '+' => 13,
+        '[' | '{' => 26,
+        ']' | '}' => 27,
+        '\\' | '|' => 43,
+        ';' | ':' => 39,
+        '\'' | '"' => 40,
+        '`' | '~' => 41,
+        ',' | '<' => 51,
+        '.' | '>' => 52,
+        '/' | '?' => 53,
+        ' ' => 57,
+        _ => return None,
+    })
+}
+
+fn named_key_to_evdev(n: &iced::keyboard::key::Named) -> Option<u16> {
+    use iced::keyboard::key::Named;
+    Some(match n {
+        Named::Enter => 28,
+        Named::Tab => 15,
+        Named::Space => 57,
+        Named::ArrowDown => 108,
+        Named::ArrowLeft => 105,
+        Named::ArrowRight => 106,
+        Named::ArrowUp => 103,
+        Named::End => 107,
+        Named::Home => 102,
+        Named::PageDown => 109,
+        Named::PageUp => 104,
+        Named::Backspace => 14,
+        Named::Delete => 111,
+        Named::Insert => 110,
+        Named::Escape => 1,
+        Named::Pause => 119,
+        Named::PrintScreen => 99,
+        Named::ContextMenu => 127,
+        Named::Help => 138,
+        Named::CapsLock => 58,
+        Named::NumLock => 69,
+        Named::ScrollLock => 70,
+        Named::Alt => 56,          // left alt fallback
+        Named::AltGraph => 100,    // right alt
+        Named::Control => 29,      // left ctrl fallback
+        Named::Shift => 42,        // left shift fallback
+        Named::Super => 125,       // left super fallback
+        Named::F1 => 59,
+        Named::F2 => 60,
+        Named::F3 => 61,
+        Named::F4 => 62,
+        Named::F5 => 63,
+        Named::F6 => 64,
+        Named::F7 => 65,
+        Named::F8 => 66,
+        Named::F9 => 67,
+        Named::F10 => 68,
+        Named::F11 => 87,
+        Named::F12 => 88,
+        Named::F13 => 183,
+        Named::F14 => 184,
+        Named::F15 => 185,
+        Named::F16 => 186,
+        Named::F17 => 187,
+        Named::F18 => 188,
+        Named::F19 => 189,
+        Named::F20 => 190,
+        Named::F21 => 191,
+        Named::F22 => 192,
+        Named::F23 => 193,
+        Named::F24 => 194,
+        Named::Convert => 92,
+        Named::NonConvert => 94,
+        Named::KanaMode => 93,
+        Named::HangulMode => 122,
+        Named::HanjaMode => 123,
+        Named::JunjaMode => 129,
+        Named::Hiragana => 91,
+        Named::Katakana => 90,
+        Named::HiraganaKatakana => 93,
+        Named::KanjiMode => 93,
+        _ => return None,
+    })
+}
+
+/// Convert a physical key to an evdev scancode.
 ///
 /// On Linux this uses the raw scancode so the mapping is layout-independent
 /// and distinguishes left/right modifiers.
-fn physical_key_to_name(physical: &iced::keyboard::key::Physical) -> Option<String> {
+fn physical_key_to_evdev(physical: &iced::keyboard::key::Physical) -> Option<u16> {
     use iced::keyboard::key::{NativeCode, Physical};
-    let code = match physical {
-        Physical::Code(code) => code_to_evdev(code)?,
-        Physical::Unidentified(NativeCode::Xkb(k)) => *k as u16,
-        _ => return None,
-    };
-    Some(format!("evdev:{code}"))
+    match physical {
+        Physical::Code(code) => code_to_evdev(code),
+        Physical::Unidentified(NativeCode::Xkb(k)) => Some(*k as u16),
+        _ => None,
+    }
 }
 
 /// Map an iced `Code` to a Linux evdev scancode.

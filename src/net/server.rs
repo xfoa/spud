@@ -296,53 +296,51 @@ async fn run_server(
 
                             if let Some(pt) = plaintext {
                                 session.record_decrypt_success();
-                                if let Some(event) = crate::net::Event::decode(&pt) {
-                                    let actions = session.tracker.handle_event(&event);
-                                    if actions.is_empty() {
-                                        println!("[server] {src}: {event:?}");
-                                    } else {
-                                        for action in &actions {
-                                            println!("[server] {src}: {action}");
+                                if let Some((events, _)) = crate::net::Event::decode_batch(&pt) {
+                                    for event in &events {
+                                        let actions = session.tracker.handle_event(event);
+                                        if actions.is_empty() {
+                                            println!("[server] {src}: {event:?}");
+                                        } else {
+                                            for action in &actions {
+                                                println!("[server] {src}: {action}");
+                                            }
                                         }
-                                    }
-                                    #[cfg(target_os = "linux")]
-                                    if let Some(inj) = injector.get() {
-                                        let is_localhost = src.ip().is_loopback();
-                                        if !is_localhost {
-                                            match &event {
-                                                crate::net::Event::KeyDown(name) => {
-                                                    if let Some(code) = crate::input::parse_key_name(name) {
-                                                        inj.key_down(code);
+                                        #[cfg(target_os = "linux")]
+                                        if let Some(inj) = injector.get() {
+                                            let is_localhost = src.ip().is_loopback();
+                                            if !is_localhost {
+                                                match event {
+                                                    crate::net::Event::KeyDown(code) => {
+                                                        inj.key_down(*code);
                                                     }
-                                                }
-                                                crate::net::Event::KeyUp(name) => {
-                                                    if let Some(code) = crate::input::parse_key_name(name) {
-                                                        inj.key_up(code);
+                                                    crate::net::Event::KeyUp(code) => {
+                                                        inj.key_up(*code);
                                                     }
+                                                    crate::net::Event::KeyRepeat(_) => {
+                                                        // Heartbeat - tracker already updated, no injection needed
+                                                    }
+                                                    crate::net::Event::MouseButton { button, pressed: true } => {
+                                                        inj.button_down(crate::input::wire_to_linux_button(*button));
+                                                    }
+                                                    crate::net::Event::MouseButton { button, pressed: false } => {
+                                                        inj.button_up(crate::input::wire_to_linux_button(*button));
+                                                    }
+                                                    crate::net::Event::MouseButtonRepeat(_) => {}
+                                                    crate::net::Event::Wheel { dx, dy } => {
+                                                        inj.wheel(*dx, *dy);
+                                                    }
+                                                    crate::net::Event::MouseAbs { x, y } => {
+                                                        let px = (*x as i32 * (i32::from(session.screen_width) - 1) + 32767) / 65535;
+                                                        let py = (*y as i32 * (i32::from(session.screen_height) - 1) + 32767) / 65535;
+                                                        inj.move_abs(px, py);
+                                                    }
+                                                    crate::net::Event::MouseMove { dx, dy } => {
+                                                        println!("[server] MouseMove dx={dx} dy={dy} window_mode={}", session.window_mode);
+                                                        inj.move_rel(i32::from(*dx), i32::from(*dy));
+                                                    }
+                                                    crate::net::Event::Keepalive => {}
                                                 }
-                                                crate::net::Event::KeyRepeat(_) => {
-                                                    // Heartbeat - tracker already updated, no injection needed
-                                                }
-                                                crate::net::Event::MouseButton { button, pressed: true } => {
-                                                    inj.button_down(crate::input::wire_to_linux_button(*button));
-                                                }
-                                                crate::net::Event::MouseButton { button, pressed: false } => {
-                                                    inj.button_up(crate::input::wire_to_linux_button(*button));
-                                                }
-                                                crate::net::Event::MouseButtonRepeat(_) => {}
-                                                crate::net::Event::Wheel { dx, dy } => {
-                                                    inj.wheel(*dx, *dy);
-                                                }
-                                                crate::net::Event::MouseAbs { x, y } => {
-                                                    let px = (*x as i32 * (i32::from(session.screen_width) - 1) + 32767) / 65535;
-                                                    let py = (*y as i32 * (i32::from(session.screen_height) - 1) + 32767) / 65535;
-                                                    inj.move_abs(px, py);
-                                                }
-                                                crate::net::Event::MouseMove { dx, dy } => {
-                                                    println!("[server] MouseMove dx={dx} dy={dy} window_mode={}", session.window_mode);
-                                                    inj.move_rel(i32::from(*dx), i32::from(*dy));
-                                                }
-                                                crate::net::Event::Keepalive => {}
                                             }
                                         }
                                     }

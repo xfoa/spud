@@ -180,6 +180,47 @@ impl Clone for ClientConnection {
     }
 }
 
+/// Send a batch of events over UDP.
+async fn send_batch(
+    batch: &[Event],
+    socket: &UdpSocket,
+    conn_id: u64,
+    encrypt: bool,
+    cipher: Option<&Aes256Gcm>,
+    seq: &AtomicU64,
+) {
+    let buf = Event::encode_batch(batch);
+    let packet: Option<Vec<u8>> = if encrypt {
+        if let Some(c) = cipher {
+            let s = seq.fetch_add(1, Ordering::SeqCst);
+            match crate::crypto::encrypt_event(c, s, &buf) {
+                Ok(mut ct) => {
+                    let mut p = Vec::with_capacity(16 + ct.len());
+                    p.extend_from_slice(&conn_id.to_le_bytes());
+                    p.extend_from_slice(&s.to_le_bytes());
+                    p.append(&mut ct);
+                    Some(p)
+                }
+                Err(e) => {
+                    eprintln!("[spud] UDP encrypt failed for conn {conn_id}: {e}");
+                    None
+                }
+            }
+        } else {
+            eprintln!("[spud] UDP encryption requested but no cipher available");
+            None
+        }
+    } else {
+        let mut p = Vec::with_capacity(8 + buf.len());
+        p.extend_from_slice(&conn_id.to_le_bytes());
+        p.extend_from_slice(&buf);
+        Some(p)
+    };
+    if let Some(p) = packet {
+        let _ = socket.send(&p).await;
+    }
+}
+
 impl ClientConnection {
     /// Connect to a server.
     ///
@@ -332,7 +373,7 @@ impl ClientConnection {
         let (udp_tx, mut udp_rx) = mpsc::unbounded_channel::<Event>();
         let (tcp_tx, mut tcp_rx) = mpsc::unbounded_channel::<ControlMsg>();
 
-        // UDP sender task
+        // UDP sender task with batching
         let udp_socket = Arc::new(udp_socket);
         let seq = AtomicU64::new(1);
         let udp_socket_clone = udp_socket.clone();
@@ -340,37 +381,36 @@ impl ClientConnection {
         let encrypt_clone = encrypt;
         let cipher_clone = cipher.clone();
         tokio::spawn(async move {
-            while let Some(event) = udp_rx.recv().await {
-                let buf = event.encode();
-                let packet: Option<Vec<u8>> = if encrypt_clone {
-                    if let Some(ref c) = cipher_clone {
-                        let s = seq.fetch_add(1, Ordering::SeqCst);
-                        match crate::crypto::encrypt_event(c, s, &buf) {
-                            Ok(mut ct) => {
-                                let mut p = Vec::with_capacity(16 + ct.len());
-                                p.extend_from_slice(&conn_id_clone.to_le_bytes());
-                                p.extend_from_slice(&s.to_le_bytes());
-                                p.append(&mut ct);
-                                Some(p)
-                            }
-                            Err(e) => {
-                                eprintln!("[spud] UDP encrypt failed for conn {conn_id_clone}: {e}");
-                                None
-                            }
+            const MAX_BATCH: usize = 8;
+            const BATCH_TIMEOUT_MS: u64 = 1;
+            let mut batch: Vec<Event> = Vec::with_capacity(MAX_BATCH);
+            let flush_deadline = tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS));
+            tokio::pin!(flush_deadline);
+
+            loop {
+                tokio::select! {
+                    Some(event) = udp_rx.recv() => {
+                        batch.push(event);
+                        if batch.len() >= MAX_BATCH {
+                            send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            batch.clear();
+                            flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
                         }
-                    } else {
-                        eprintln!("[spud] UDP encryption requested but no cipher available");
-                        None
                     }
-                } else {
-                    let mut p = Vec::with_capacity(8 + buf.len());
-                    p.extend_from_slice(&conn_id_clone.to_le_bytes());
-                    p.extend_from_slice(&buf);
-                    Some(p)
-                };
-                if let Some(p) = packet {
-                    let _ = udp_socket_clone.send(&p).await;
+                    _ = &mut flush_deadline => {
+                        if !batch.is_empty() {
+                            send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            batch.clear();
+                        }
+                        flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
+                    }
+                    else => break,
                 }
+            }
+
+            // Flush any remaining events on shutdown
+            if !batch.is_empty() {
+                send_batch(&batch, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
             }
         });
 
