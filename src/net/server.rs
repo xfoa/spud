@@ -139,6 +139,7 @@ fn get_screen_size() -> (u16, u16) {
         let bounds = main.bounds();
         return (bounds.size.width as u16, bounds.size.height as u16);
     }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         return (1920, 1080);
     }
@@ -150,9 +151,9 @@ fn wire_to_platform_button(wire: u8) -> u16 {
 }
 
 #[cfg(target_os = "macos")]
-fn wire_to_platform_button(_wire: u8) -> u16 {
+fn wire_to_platform_button(wire: u8) -> u16 {
     // macOS injector translates wire codes internally.
-    _wire as u16
+    wire as u16
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
