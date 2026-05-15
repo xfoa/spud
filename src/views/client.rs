@@ -550,7 +550,7 @@ impl State {
             Message::KeyRepeatTick => {
                 if let Some(sender) = &self.sender {
                     for code in &self.pressed_keys {
-                        sender.send(&crate::net::Event::KeyRepeat(*code));
+                        sender.send(&crate::net::Event::KeyRepeat(*code, 0));
                     }
                     for button in &self.pressed_mouse_buttons {
                         sender.send(&crate::net::Event::MouseButtonRepeat(*button));
@@ -667,7 +667,7 @@ impl State {
     fn release_all_held(&mut self) {
         if let Some(sender) = &self.sender {
             for name in &self.pressed_keys {
-                sender.send(&crate::net::Event::KeyUp(name.clone()));
+                sender.send(&crate::net::Event::KeyUp(name.clone(), 0));
             }
             for button in &self.pressed_mouse_buttons {
                 sender.send(&crate::net::Event::MouseButton { button: *button, pressed: false });
@@ -1688,7 +1688,7 @@ fn iced_to_wire(
             let code = physical_key_to_evdev(physical_key)
                 .or_else(|| key_to_evdev(key))?;
             if pressed_keys.insert(code) {
-                Some(crate::net::Event::KeyDown(code))
+                Some(crate::net::Event::KeyDown(code, 0))
             } else {
                 None
             }
@@ -1697,7 +1697,7 @@ fn iced_to_wire(
             let code = physical_key_to_evdev(physical_key)
                 .or_else(|| key_to_evdev(key))?;
             pressed_keys.remove(&code);
-            Some(crate::net::Event::KeyUp(code))
+            Some(crate::net::Event::KeyUp(code, 0))
         }
         iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
             if is_window_mode {
@@ -1753,7 +1753,7 @@ fn iced_to_wire(
             if natural_scroll {
                 dy = -dy;
             }
-            (dx != 0 || dy != 0).then_some(crate::net::Event::Wheel { dx, dy })
+            (dx != 0 || dy != 0).then_some(crate::net::Event::Wheel { dx, dy, seq: 0 })
         }
         _ => None,
     }
@@ -1772,7 +1772,7 @@ fn input_event_to_wire(
             // X11 keycodes are offset by 8 from Linux evdev scancodes.
             let code = keycode.saturating_sub(8) as u16;
             if pressed_keys.insert(code) {
-                Some(crate::net::Event::KeyDown(code))
+                Some(crate::net::Event::KeyDown(code, 0))
             } else {
                 None
             }
@@ -1780,7 +1780,7 @@ fn input_event_to_wire(
         InputEvent::KeyRelease { keycode } => {
             let code = keycode.saturating_sub(8) as u16;
             pressed_keys.remove(&code);
-            Some(crate::net::Event::KeyUp(code))
+            Some(crate::net::Event::KeyUp(code, 0))
         }
         InputEvent::MouseMove { dx, dy } => Some(crate::net::Event::MouseMove {
             dx: ((*dx as f32) * sensitivity).round() as i16,
@@ -1793,7 +1793,7 @@ fn input_event_to_wire(
             if natural_scroll {
                 dy = -dy;
             }
-            Some(crate::net::Event::Wheel { dx: *dx, dy })
+            Some(crate::net::Event::Wheel { dx: *dx, dy, seq: 0 })
         }
         InputEvent::MouseButton { button, pressed: true } => {
             if pressed_mouse_buttons.insert(*button) {

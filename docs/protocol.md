@@ -352,14 +352,14 @@ title Event (5 bytes)
 
 | Tag | Event | Data layout |
 |-----|-------|-------------|
-| `0x01` | `KeyDown` | `u16` evdev scancode |
-| `0x02` | `KeyUp` | `u16` evdev scancode |
-| `0x03` | `KeyRepeat` | `u16` evdev scancode |
+| `0x01` | `KeyDown` | `u16` evdev scancode, `u8` seq |
+| `0x02` | `KeyUp` | `u16` evdev scancode, `u8` seq |
+| `0x03` | `KeyRepeat` | `u16` evdev scancode, `u8` seq |
 | `0x04` | `MouseMove` | `i16 dx`, `i16 dy` |
 | `0x05` | `MouseAbs` | `u16 x`, `u16 y` |
 | `0x06` | `MouseButton` | `u8 button` in bits 0-6, `pressed` in bit 7 (1 = down, 0 = up) |
 | `0x07` | `MouseButtonRepeat` | `u8 button` |
-| `0x08` | `Wheel` | `i8 dx`, `i8 dy` |
+| `0x08` | `Wheel` | `i8 dx`, `i8 dy`, `u8` seq |
 | `0x09` | `Keepalive` | unused |
 
 All multi-byte fields are little-endian. Unused trailing bytes are zero.
@@ -367,7 +367,7 @@ All multi-byte fields are little-endian. Unused trailing bytes are zero.
 ### Event semantics
 
 * `KeyDown` / `KeyUp` / `KeyRepeat`: carry a `u16` Linux evdev scancode
-  (see [Key encoding](#key-encoding)).
+  (see [Key encoding](#key-encoding)) and a `u8` sequence number.
 * `MouseMove`: relative deltas in pixels (`i16` each).
 * `MouseAbs`: absolute position normalised to `0..65535`. The server maps this
   to its screen dimensions using `screen_width` / `screen_height` from
@@ -375,13 +375,36 @@ All multi-byte fields are little-endian. Unused trailing bytes are zero.
 * `MouseButton`: `button` is an evdev-like code (`1`=left, `2`=middle,
   `3`=right, `8`=back, `9`=forward); `pressed` is `1` for down, `0` for up.
 * `Wheel`: discrete scroll deltas. Lines are passed through; pixel deltas are
-  divided by 10. Both axes are clamped to `i8` range.
+  divided by 10. Both axes are clamped to `i8` range. Also carries a `u8`
+  sequence number.
 * `KeyRepeat`: sent by the client over UDP as a heartbeat for held keys.
   Not batched.
 * `MouseButtonRepeat`: sent by the client over UDP as a heartbeat for held
   mouse buttons. Not batched.
 * `Keepalive`: sent by the client over UDP as a lightweight liveness signal.
   Not batched.
+
+### Sequence numbers for keyboard and wheel events
+
+Keyboard events (`KeyDown`, `KeyUp`, `KeyRepeat`) and wheel events (`Wheel`)
+carry a per-event `u8` sequence number assigned by the client. The client
+increments a `u8` counter for each such event, wrapping on overflow. Sequence
+number `0` is reserved for backward compatibility (old clients that do not
+assign sequence numbers will have `seq = 0` in these fields).
+
+The server maintains a separate 256-bit bitmap plus circular buffer
+(`SeqHistoryU8`) to track recently seen `u8` sequence numbers. When a keyboard
+or wheel event arrives with `seq != 0`:
+1. If the sequence number is already in the bitmap, the event is a duplicate
+   and is dropped.
+2. Otherwise, the sequence number is added to the bitmap and the event is
+   processed normally.
+
+This prevents duplicate injection when the same UDP packet is delivered twice
+or when a redundant batch contains keyboard events. It complements the existing
+`u16` batch-level deduplication used for mouse movement events. The circular
+buffer has a fixed capacity of 64 entries (much larger than the expected
+out-of-order window for keyboard traffic).
 
 ## Key encoding
 
@@ -436,13 +459,13 @@ resulting actions.
 | `KeyDown(code)`      | no            | `press name`; insert with current time.                   |
 | `KeyDown(code)`      | yes           | `release name (lost up)`, `press name`; refresh time.     |
 | `KeyRepeat(code)`    | yes           | `repeat name`; refresh time.                              |
-| `KeyRepeat(code)`    | no            | `press name (repeat without prior down)`; insert.         |
+| `KeyRepeat(code)`    | no            | (ignored)                                                 |
 | `KeyUp(code)`        | yes           | `release name`; remove from map.                          |
 | `KeyUp(code)`        | no            | (ignored)                                                 |
 | `MouseButton{down}`  | no            | `press mouse N`; insert with current time.                |
 | `MouseButton{down}`  | yes           | `release mouse N (lost up)`, `press mouse N`; refresh.    |
 | `MouseButtonRepeat`  | yes           | `repeat mouse N`; refresh time.                           |
-| `MouseButtonRepeat`  | no            | `press mouse N (repeat without prior down)`; insert.      |
+| `MouseButtonRepeat`  | no            | (ignored)                                                 |
 | `MouseButton{up}`    | yes           | `release mouse N`; remove from map.                       |
 | `MouseButton{up}`    | no            | (ignored)                                                 |
 

@@ -25,16 +25,27 @@ There already exist tools that solve similar problems to Spud, so why not use th
 * LAN discovery
 * Optional local screen blanking on input capture
 * Tolerance of poor network conditions
-* Optional password protection and encryption
+* Optional password protection and [encryption](docs/encryption.md)
+
+## Supported platforms
+
+* Linux
+  * X11
+  * Wayland (Gnome, KDE, COSMIC, possibly more!)
+* macOS
+  * Tested on Tahoe (26)
+* Windows support comming soon!
 
 ## Install
+
+### Linux
 
 Binaries are available from the GitHub project [releases](https://github.com/xfoa/spud/releases) page.
 Put them wherever your system expects to find binaries.
 
-On **Linux**, the server can install input events via a privileged helper that
-runs through `pkexec`. To avoid typing your password every time the server
-starts, install the polkit rule:
+On **Linux**, the server can inject input events via a privileged helper that
+runs through `pkexec`. To start the server without having to enter your
+password (eg if starting on boot), install the polkit rule:
 
 ```bash
 sudo install -Dm644 resources/50-spud-injection.pkla \
@@ -47,6 +58,12 @@ the binary and desktop entry:
 ```bash
 ./install.sh
 ```
+
+### macOS
+
+At the moment only available via `cargo run`. Better options coming soon! You
+will need to grant permission in macOS Settings -> Privacy \& Security ->
+Accessibility.
 
 ## Build
 

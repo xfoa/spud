@@ -334,11 +334,27 @@ async fn run_server(
                                     // Process primary (current) batch fully.
                                     let primary = &batches[0];
                                     for event in &primary.events {
+                                        // Deduplicate keyboard and wheel events by seq number.
+                                        // Seq 0 is from old clients (backward compat) and bypasses dedup.
+                                        let seq = match event {
+                                            crate::net::Event::KeyDown(_, s) | crate::net::Event::KeyUp(_, s) | crate::net::Event::KeyRepeat(_, s) => Some(*s),
+                                            crate::net::Event::Wheel { seq, .. } => Some(*seq),
+                                            _ => None,
+                                        };
+                                        if let Some(s) = seq {
+                                            if s != 0 && session.key_history.contains(s) {
+                                                continue; // duplicate
+                                            }
+                                            if s != 0 {
+                                                session.key_history.push(s);
+                                            }
+                                        }
+
                                         // If a repeat arrives without a prior down (lost packet),
                                         // inject the synthetic down before handling the repeat.
                                         let needs_key_down = matches!(
                                             event,
-                                            crate::net::Event::KeyRepeat(c) if !session.tracker.has_key(*c)
+                                            crate::net::Event::KeyRepeat(c, _) if !session.tracker.has_key(*c)
                                         );
                                         let needs_button_down = matches!(
                                             event,
@@ -357,7 +373,7 @@ async fn run_server(
                                         if let Some(inj) = injector.get() {
                                             if !is_localhost {
                                                 if needs_key_down {
-                                                    if let crate::net::Event::KeyRepeat(code) = event {
+                                                    if let crate::net::Event::KeyRepeat(code, _) = event {
                                                         inj.key_down(*code);
                                                     }
                                                 }
@@ -367,13 +383,13 @@ async fn run_server(
                                                     }
                                                 }
                                                 match event {
-                                                    crate::net::Event::KeyDown(code) => {
+                                                    crate::net::Event::KeyDown(code, _) => {
                                                         inj.key_down(*code);
                                                     }
-                                                    crate::net::Event::KeyUp(code) => {
+                                                    crate::net::Event::KeyUp(code, _) => {
                                                         inj.key_up(*code);
                                                     }
-                                                    crate::net::Event::KeyRepeat(_) => {
+                                                    crate::net::Event::KeyRepeat(_, _) => {
                                                         // Heartbeat - tracker already updated, no injection needed
                                                     }
                                                     crate::net::Event::MouseButton { button, pressed: true } => {
@@ -383,7 +399,7 @@ async fn run_server(
                                                         inj.button_up(crate::input::wire_to_linux_button(*button));
                                                     }
                                                     crate::net::Event::MouseButtonRepeat(_) => {}
-                                                    crate::net::Event::Wheel { dx, dy } => {
+                                                    crate::net::Event::Wheel { dx, dy, .. } => {
                                                         inj.wheel(*dx, *dy);
                                                     }
                                                     crate::net::Event::MouseAbs { x, y } => {

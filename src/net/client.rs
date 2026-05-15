@@ -397,6 +397,7 @@ impl ClientConnection {
         tokio::spawn(async move {
             const BATCH_TIMEOUT_MS: u64 = 1;
             let mut next_seq: u16 = 0;
+            let mut next_key_seq: u8 = 1;
             let mut batch: Vec<Event> = Vec::new();
             let mut history: std::collections::VecDeque<(Vec<Event>, u16)> = std::collections::VecDeque::new();
             let flush_deadline = tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS));
@@ -410,7 +411,27 @@ impl ClientConnection {
                     batch.reserve(current_max - batch.capacity());
                 }
                 tokio::select! {
-                    Some(event) = udp_rx.recv() => {
+                    Some(mut event) = udp_rx.recv() => {
+                        // Assign sequence numbers to keyboard and wheel events.
+                        match &mut event {
+                            Event::KeyDown(_, ref mut seq) |
+                            Event::KeyUp(_, ref mut seq) |
+                            Event::KeyRepeat(_, ref mut seq) => {
+                                *seq = next_key_seq;
+                                next_key_seq = next_key_seq.wrapping_add(1);
+                                if next_key_seq == 0 {
+                                    next_key_seq = 1; // reserve 0 for backward compat
+                                }
+                            }
+                            Event::Wheel { ref mut seq, .. } => {
+                                *seq = next_key_seq;
+                                next_key_seq = next_key_seq.wrapping_add(1);
+                                if next_key_seq == 0 {
+                                    next_key_seq = 1;
+                                }
+                            }
+                            _ => {}
+                        }
                         let is_mouse_move = matches!(event, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. });
                         if is_mouse_move {
                             batch.push(event);

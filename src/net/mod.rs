@@ -53,15 +53,17 @@ pub struct DecodedBatch {
 /// Input event transmitted over the wire.
 ///
 /// Uses a compact 5-byte fixed encoding per event.
+/// Keyboard and wheel events carry a u8 sequence number for deduplication.
+/// Seq 0 is reserved for backward compatibility with old clients.
 #[derive(Debug, Clone)]
 pub enum Event {
-    KeyDown(u16),
-    KeyUp(u16),
+    KeyDown(u16, u8),
+    KeyUp(u16, u8),
     MouseMove { dx: i16, dy: i16 },
     MouseAbs { x: u16, y: u16 },
     MouseButton { button: u8, pressed: bool },
-    Wheel { dx: i8, dy: i8 },
-    KeyRepeat(u16),
+    Wheel { dx: i8, dy: i8, seq: u8 },
+    KeyRepeat(u16, u8),
     MouseButtonRepeat(u8),
     Keepalive,
 }
@@ -74,17 +76,20 @@ impl Event {
     pub fn encode(&self) -> [u8; Self::ENCODED_SIZE] {
         let mut buf = [0u8; Self::ENCODED_SIZE];
         match self {
-            Event::KeyDown(code) => {
+            Event::KeyDown(code, seq) => {
                 buf[0] = TAG_KEY_DOWN;
                 buf[1..3].copy_from_slice(&code.to_le_bytes());
+                buf[3] = *seq;
             }
-            Event::KeyUp(code) => {
+            Event::KeyUp(code, seq) => {
                 buf[0] = TAG_KEY_UP;
                 buf[1..3].copy_from_slice(&code.to_le_bytes());
+                buf[3] = *seq;
             }
-            Event::KeyRepeat(code) => {
+            Event::KeyRepeat(code, seq) => {
                 buf[0] = TAG_KEY_REPEAT;
                 buf[1..3].copy_from_slice(&code.to_le_bytes());
+                buf[3] = *seq;
             }
             Event::MouseMove { dx, dy } => {
                 buf[0] = TAG_MOUSE_MOVE;
@@ -100,10 +105,11 @@ impl Event {
                 buf[0] = TAG_MOUSE_BUTTON;
                 buf[1] = *button | (if *pressed { 0x80 } else { 0 });
             }
-            Event::Wheel { dx, dy } => {
+            Event::Wheel { dx, dy, seq } => {
                 buf[0] = TAG_WHEEL;
                 buf[1] = *dx as u8;
                 buf[2] = *dy as u8;
+                buf[3] = *seq;
             }
             Event::MouseButtonRepeat(button) => {
                 buf[0] = TAG_MOUSE_BUTTON_REPEAT;
@@ -124,9 +130,9 @@ impl Event {
         }
         let tag = buf[0];
         let event = match tag {
-            TAG_KEY_DOWN => Event::KeyDown(u16::from_le_bytes([buf[1], buf[2]])),
-            TAG_KEY_UP => Event::KeyUp(u16::from_le_bytes([buf[1], buf[2]])),
-            TAG_KEY_REPEAT => Event::KeyRepeat(u16::from_le_bytes([buf[1], buf[2]])),
+            TAG_KEY_DOWN => Event::KeyDown(u16::from_le_bytes([buf[1], buf[2]]), buf[3]),
+            TAG_KEY_UP => Event::KeyUp(u16::from_le_bytes([buf[1], buf[2]]), buf[3]),
+            TAG_KEY_REPEAT => Event::KeyRepeat(u16::from_le_bytes([buf[1], buf[2]]), buf[3]),
             TAG_MOUSE_MOVE => Event::MouseMove {
                 dx: i16::from_le_bytes([buf[1], buf[2]]),
                 dy: i16::from_le_bytes([buf[3], buf[4]]),
@@ -142,6 +148,7 @@ impl Event {
             TAG_WHEEL => Event::Wheel {
                 dx: buf[1] as i8,
                 dy: buf[2] as i8,
+                seq: buf[3],
             },
             TAG_MOUSE_BUTTON_REPEAT => Event::MouseButtonRepeat(buf[1]),
             TAG_KEEPALIVE => Event::Keepalive,

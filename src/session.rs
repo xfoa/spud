@@ -190,7 +190,7 @@ impl KeyTracker {
     /// Process a single event and return any actions taken.
     pub fn handle_event(&mut self, event: &Event) -> Vec<String> {
         match event {
-            Event::KeyDown(code) => {
+            Event::KeyDown(code, _) => {
                 let mut actions = Vec::new();
                 let name = evdev_name(*code);
                 if self.keys.contains_key(code) {
@@ -200,17 +200,17 @@ impl KeyTracker {
                 self.keys.insert(*code, Instant::now());
                 actions
             }
-            Event::KeyRepeat(code) => {
+            Event::KeyRepeat(code, _) => {
                 let name = evdev_name(*code);
                 if self.keys.contains_key(code) {
                     self.keys.insert(*code, Instant::now());
                     vec![format!("repeat {name}")]
                 } else {
-                    self.keys.insert(*code, Instant::now());
-                    vec![format!("press {name} (repeat without prior down)")]
+                    // Late repeat after release - do not re-press.
+                    Vec::new()
                 }
             }
-            Event::KeyUp(code) => {
+            Event::KeyUp(code, _) => {
                 let name = evdev_name(*code);
                 if self.keys.remove(code).is_some() {
                     vec![format!("release {name}")]
@@ -232,8 +232,8 @@ impl KeyTracker {
                     self.mouse_buttons.insert(*button, Instant::now());
                     vec![format!("repeat mouse {button}")]
                 } else {
-                    self.mouse_buttons.insert(*button, Instant::now());
-                    vec![format!("press mouse {button} (repeat without prior down)")]
+                    // Late repeat after release - do not re-press.
+                    Vec::new()
                 }
             }
             Event::MouseButton { button, pressed: false } => {
@@ -342,6 +342,54 @@ impl MouseHistory {
     }
 }
 
+/// Deduplicates u8 sequence numbers using a 256-entry bitmap and circular buffer.
+/// Used for keyboard and wheel event deduplication.
+pub struct SeqHistoryU8 {
+    /// One bit per possible u8 sequence number. 256 bits = 32 bytes.
+    bitmap: Box<[u8; 32]>,
+    /// Circular buffer of sequence numbers currently marked in the bitmap.
+    buffer: VecDeque<u8>,
+    /// Maximum number of sequence numbers to track at once.
+    capacity: usize,
+}
+
+impl SeqHistoryU8 {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            bitmap: Box::new([0u8; 32]),
+            buffer: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    /// Check whether a sequence number has been seen.
+    pub fn contains(&self, seq: u8) -> bool {
+        let idx = (seq >> 3) as usize;
+        let bit = seq & 7;
+        (self.bitmap[idx] >> bit) & 1 != 0
+    }
+
+    /// Mark a sequence number as seen, evicting the oldest if at capacity.
+    pub fn push(&mut self, seq: u8) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.contains(seq) {
+            return;
+        }
+        while self.buffer.len() >= self.capacity {
+            let old = self.buffer.pop_front().unwrap();
+            let idx = (old >> 3) as usize;
+            let bit = old & 7;
+            self.bitmap[idx] &= !(1 << bit);
+        }
+        let idx = (seq >> 3) as usize;
+        let bit = seq & 7;
+        self.bitmap[idx] |= 1 << bit;
+        self.buffer.push_back(seq);
+    }
+}
+
 pub struct SessionState {
     pub keys: Option<SessionKeys>,
     pub replay_window: ReplayWindow,
@@ -354,6 +402,7 @@ pub struct SessionState {
     pub screen_height: u16,
     pub window_mode: bool,
     pub mouse_history: MouseHistory,
+    pub key_history: SeqHistoryU8,
 }
 
 impl SessionState {
@@ -370,6 +419,7 @@ impl SessionState {
             screen_height,
             window_mode: false,
             mouse_history: MouseHistory::new(0),
+            key_history: SeqHistoryU8::new(64),
         }
     }
 
