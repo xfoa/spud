@@ -131,6 +131,7 @@ fn get_screen_size() -> (u16, u16) {
                 return (screen.width_in_pixels, screen.height_in_pixels);
             }
         }
+        return (1920, 1080);
     }
     #[cfg(target_os = "macos")]
     {
