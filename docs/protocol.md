@@ -66,7 +66,7 @@ pub enum ControlMsg {
     AuthChallenge { nonce: [u8; 32], salt: String },
     AuthResponse  { hmac: [u8; 32] },
     AuthResult    { ok: bool },
-    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, auth: bool, key_timeout_ms: u16, screen_width: u16, screen_height: u16 },
+    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, auth: bool, screen_width: u16, screen_height: u16 },
     SetCaptureMode { window_mode: bool },
     Keepalive,
 }
@@ -85,8 +85,6 @@ session.
   if this does not match the client's preference.
 * `auth`: `true` if the server required passphrase authentication for this
   session.
-* `key_timeout_ms`: server key-release timeout in milliseconds. The client
-  derives its key-repeat interval from this value (`key_timeout_ms / 2`).
 * `screen_width` / `screen_height`: server display dimensions in pixels. The
   client uses these to scale absolute mouse coordinates.
 
@@ -269,23 +267,23 @@ privileged helper process started via `pkexec`. See
 
 ### Sending input
 
-The client maintains `pressed_keys: HashSet<String>` and
+The client maintains `pressed_keys: HashSet<u16>` and
 `pressed_mouse_buttons: HashSet<u8>`.
 
-* On a native key press event, if the name is not already in `pressed_keys`,
+* On a native key press event, if the code is not already in `pressed_keys`,
   insert it and send `KeyDown`. If it is already present (OS auto-repeat), the
   event is suppressed.
-* On a native key release event, remove the name and send `KeyUp`.
+* On a native key release event, remove the code and send `KeyUp`.
 * Mouse buttons are deduplicated the same way using `pressed_mouse_buttons`.
-* Every `key_timeout_ms / 2` milliseconds while a session is active, send
-  `KeyRepeat` for every name in `pressed_keys` and `MouseButtonRepeat` for
-  every button in `pressed_mouse_buttons`. This is the only source of repeat
-  traffic.
+* Every `key_repeat_interval_ms` (configurable on the client, default 250 ms)
+  while a session is active, send `KeyRepeat` for every code in `pressed_keys`
+  and `MouseButtonRepeat` for every button in `pressed_mouse_buttons`. This is
+  the only source of repeat traffic.
 * On `Disconnect` or `ConnectionLost`, clear both sets.
 
-This keeps held-key traffic at roughly 2 packets per second per held key,
-regardless of OS auto-repeat rate, while the key repeat still allows one
-dropped UDP datagram before the server times the key out.
+This keeps held-key traffic at a configurable rate (default 4 packets per
+second per held key), regardless of OS auto-repeat rate, while still allowing
+some dropped UDP datagrams before the server times the key out.
 
 ### Mouse
 

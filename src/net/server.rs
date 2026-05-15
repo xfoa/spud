@@ -483,7 +483,7 @@ async fn handle_client(
     let session = SessionState::new(encrypt_udp, keys, peer, key_timeout_ms, screen_width, screen_height);
     sessions.insert(conn_id, session);
 
-    let init = ControlMsg::SessionInit { conn_id, uuid, encrypt: encrypt_udp, auth: require_auth && !passphrase_hash.is_empty(), key_timeout_ms, screen_width, screen_height };
+    let init = ControlMsg::SessionInit { conn_id, uuid, encrypt: encrypt_udp, auth: require_auth && !passphrase_hash.is_empty(), screen_width, screen_height };
     let bytes = match postcard::to_allocvec(&init) {
         Ok(b) => b,
         Err(_) => {

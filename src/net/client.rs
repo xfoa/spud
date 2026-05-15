@@ -147,7 +147,6 @@ pub struct ClientConnection {
     _shutdown: Arc<tokio::sync::Notify>,
     pub conn_id: u64,
     pub encrypt: bool,
-    pub key_timeout_ms: u16,
     pub last_salt: Option<String>,
     pub screen_size: Option<(u16, u16)>,
     tcp_tx: mpsc::UnboundedSender<ControlMsg>,
@@ -160,7 +159,6 @@ impl std::fmt::Debug for ClientConnection {
         f.debug_struct("ClientConnection")
             .field("conn_id", &self.conn_id)
             .field("encrypt", &self.encrypt)
-            .field("key_timeout_ms", &self.key_timeout_ms)
             .finish_non_exhaustive()
     }
 }
@@ -172,7 +170,6 @@ impl Clone for ClientConnection {
             _shutdown: self._shutdown.clone(),
             conn_id: self.conn_id,
             encrypt: self.encrypt,
-            key_timeout_ms: self.key_timeout_ms,
             last_salt: self.last_salt.clone(),
             screen_size: self.screen_size,
             tcp_tx: self.tcp_tx.clone(),
@@ -358,7 +355,7 @@ impl ClientConnection {
             }
         };
 
-        let (mut framed, udp_socket, conn_id, server_encrypt, key_timeout_ms, phc_to_save, screen_width, screen_height) =
+        let (mut framed, udp_socket, conn_id, server_encrypt, phc_to_save, screen_width, screen_height) =
             Self::handshake(tls, addr, client_require_auth, passphrase, saved_phc).await?;
         if client_encrypt != server_encrypt {
             return Err(ConnectError::Io(io::Error::new(io::ErrorKind::InvalidData, if client_encrypt { 
@@ -470,7 +467,6 @@ impl ClientConnection {
             _shutdown: shutdown,
             conn_id,
             encrypt,
-            key_timeout_ms,
             last_salt: phc_to_save.clone(),
             screen_size: Some((screen_width, screen_height)),
             cipher,
@@ -484,7 +480,7 @@ impl ClientConnection {
         client_require_auth: bool,
         passphrase: Option<String>,
         saved_phc: Option<String>,
-    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, u16, Option<String>, u16, u16)> {
+    ) -> io::Result<(Framed<TlsStream<TcpStream>, LengthDelimitedCodec>, UdpSocket, u64, bool, Option<String>, u16, u16)> {
         let mut framed = Framed::new(tls, LengthDelimitedCodec::new());
 
         let frame = tokio::time::timeout(Duration::from_secs(5), framed.next())
@@ -558,8 +554,8 @@ impl ClientConnection {
             }
         }
 
-        let (conn_id, server_encrypt, server_auth, key_timeout_ms, screen_width, screen_height) = match msg {
-            ControlMsg::SessionInit { conn_id, encrypt, auth, key_timeout_ms, screen_width, screen_height, .. } => (conn_id, encrypt, auth, key_timeout_ms, screen_width, screen_height),
+        let (conn_id, server_encrypt, server_auth, screen_width, screen_height) = match msg {
+            ControlMsg::SessionInit { conn_id, encrypt, auth, screen_width, screen_height, .. } => (conn_id, encrypt, auth, screen_width, screen_height),
             _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Connect failed: expected SessionInit")),
         };
 
@@ -577,7 +573,7 @@ impl ClientConnection {
         let udp = UdpSocket::bind("0.0.0.0:0").await?;
         udp.connect(server_addr).await?;
 
-        Ok((framed, udp, conn_id, server_encrypt, key_timeout_ms, phc_to_save, screen_width, screen_height))
+        Ok((framed, udp, conn_id, server_encrypt, phc_to_save, screen_width, screen_height))
     }
 
     pub fn send(&self, event: &Event) {

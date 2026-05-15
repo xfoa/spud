@@ -80,6 +80,7 @@ pub enum Message {
     ReconnectFailed(u64),
     KeyRepeatTick,
     KeepaliveTick,
+    KeyRepeatIntervalChanged(u16),
     KeepaliveIntervalChanged(u16),
     ReconnectTimeoutChanged(String),
     BlankScreenToggled(bool),
@@ -121,7 +122,7 @@ pub struct State {
     last_error: Option<String>,
     pressed_keys: HashSet<u16>,
     pressed_mouse_buttons: HashSet<u8>,
-    keyrepeat_interval_ms: u64,
+    key_repeat_interval_ms: u16,
     reconnecting: bool,
     reconnect_generation: u64,
     keepalive_interval_ms: u16,
@@ -182,7 +183,7 @@ impl State {
             last_error: None,
             pressed_keys: HashSet::new(),
             pressed_mouse_buttons: HashSet::new(),
-            keyrepeat_interval_ms: 500, // default when not connected; set from server's key_timeout_ms on connect
+            key_repeat_interval_ms: cfg.key_repeat_interval_ms,
             reconnecting: false,
             reconnect_generation: 0,
             keepalive_interval_ms: cfg.keepalive_interval_ms,
@@ -211,6 +212,7 @@ impl State {
             hotkey: self.hotkey.clone(),
             require_auth: self.require_auth,
             passphrase_hash: self.passphrase_hash.clone(),
+            key_repeat_interval_ms: self.key_repeat_interval_ms,
             keepalive_interval_ms: self.keepalive_interval_ms,
             reconnect_timeout_secs: self.reconnect_timeout_secs.parse().unwrap_or(30),
             blank_screen: self.blank_screen,
@@ -266,7 +268,6 @@ impl State {
                 self.connecting = true;
             }
             Message::ConnectSuccess(sender, phc) => {
-                self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
                 if let Some(phc) = phc {
                     self.passphrase_hash = phc;
                 }
@@ -349,7 +350,6 @@ impl State {
             }
             Message::ReconnectSuccess(sender, gen) => {
                 if self.reconnecting && self.reconnect_generation == gen {
-                    self.keyrepeat_interval_ms = (u64::from(sender.key_timeout_ms) / 2).max(50);
                     self.server_screen_size = sender.screen_size;
                     if let Some((w, h)) = self.server_screen_size {
                         println!("[client] Server screen size: {w}x{h}");
@@ -567,6 +567,7 @@ impl State {
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
             Message::MouseBatchSizeChanged(v) => self.mouse_batch_size = v,
             Message::BatchRedundancyChanged(v) => self.batch_redundancy = v,
+            Message::KeyRepeatIntervalChanged(v) => self.key_repeat_interval_ms = v,
             Message::UdpDropPercentChanged(v) => {
                 self.udp_drop_percent = v;
                 if let Some(sender) = &self.sender {
@@ -589,7 +590,7 @@ impl State {
     }
 
     pub fn keyrepeat_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_millis(self.keyrepeat_interval_ms)
+        std::time::Duration::from_millis(u64::from(self.key_repeat_interval_ms))
     }
 
     pub fn keepalive_interval(&self) -> std::time::Duration {
@@ -1517,6 +1518,23 @@ impl State {
         ]
         .spacing(0);
 
+        let key_repeat_row = row![
+            slider(10..=1000, self.key_repeat_interval_ms, Message::KeyRepeatIntervalChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{} ms", self.key_repeat_interval_ms)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let key_repeat_field = column![
+            text("Key repeat interval").size(16).color(mt::ON_SURFACE),
+            ui::v_space(4.0),
+            ui::helper_text("Lower values make the server less likely to time out held keys un unreliable networks but increase overhead."),
+            ui::v_space(16.0),
+            key_repeat_row,
+        ]
+        .spacing(0);
+
         let timeout_field = column![
             text("Reconnect timeout").size(16).color(mt::ON_SURFACE),
             ui::v_space(4.0),
@@ -1595,6 +1613,8 @@ impl State {
                 ui::card_title("Performance"),
                 ui::v_space(12.0),
                 keepalive_field,
+                ui::v_space(16.0),
+                key_repeat_field,
                 ui::v_space(16.0),
                 batch_size_field,
                 ui::v_space(16.0),
