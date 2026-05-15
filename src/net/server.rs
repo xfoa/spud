@@ -298,6 +298,17 @@ async fn run_server(
                                 session.record_decrypt_success();
                                 if let Some((events, _)) = crate::net::Event::decode_batch(&pt) {
                                     for event in &events {
+                                        // If a repeat arrives without a prior down (lost packet),
+                                        // inject the synthetic down before handling the repeat.
+                                        let needs_key_down = matches!(
+                                            event,
+                                            crate::net::Event::KeyRepeat(c) if !session.tracker.has_key(*c)
+                                        );
+                                        let needs_button_down = matches!(
+                                            event,
+                                            crate::net::Event::MouseButtonRepeat(b) if !session.tracker.has_button(*b)
+                                        );
+
                                         let actions = session.tracker.handle_event(event);
                                         if actions.is_empty() {
                                             println!("[server] {src}: {event:?}");
@@ -310,6 +321,16 @@ async fn run_server(
                                         if let Some(inj) = injector.get() {
                                             let is_localhost = src.ip().is_loopback();
                                             if !is_localhost {
+                                                if needs_key_down {
+                                                    if let crate::net::Event::KeyRepeat(code) = event {
+                                                        inj.key_down(*code);
+                                                    }
+                                                }
+                                                if needs_button_down {
+                                                    if let crate::net::Event::MouseButtonRepeat(button) = event {
+                                                        inj.button_down(crate::input::wire_to_linux_button(*button));
+                                                    }
+                                                }
                                                 match event {
                                                     crate::net::Event::KeyDown(code) => {
                                                         inj.key_down(*code);

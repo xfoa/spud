@@ -171,6 +171,14 @@ pub struct KeyTracker {
 }
 
 impl KeyTracker {
+    pub fn has_key(&self, code: u16) -> bool {
+        self.keys.contains_key(&code)
+    }
+
+    pub fn has_button(&self, button: u8) -> bool {
+        self.mouse_buttons.contains_key(&button)
+    }
+
     pub fn new(timeout_ms: u16) -> Self {
         Self {
             keys: HashMap::new(),

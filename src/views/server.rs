@@ -700,7 +700,7 @@ impl State {
             slider_row,
             ui::v_space(4.0),
             ui::helper_text(
-                "Compensates for lost release event packets. Lower values are better for less reliable network conditions."
+                "Compensates for lost release event packets. Higher values may give smoother performance reliable network conditions, but higher release latency."
             ),
         ]
         .spacing(6);
