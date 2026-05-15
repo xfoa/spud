@@ -1,7 +1,5 @@
 # Spud
 
-## WARNING: This project is a work in progress and is currently unusable
-
 ![The Spud icon, a potato with a game controller D-pad and buttons carved into it](resources/icon.png)
 
 Spud solves the problem of wanting to play games on a computer attached your TV, from a laptop on your couch.
@@ -20,14 +18,14 @@ There already exist tools that solve similar problems to Spud, so why not use th
 ## Features
 
 * Simple UI
-* Cross-platform
+* Cross-platform (WIP)
 * Low latency input streaming
-* Input capture toggling by hotkey or window focus
-* Screen blanking on input capture
-* Tolerance of poor network conditions
-* Local screen blanking on client while capturing input
-* Optional password protection and encryption
+* Input capture toggling by hotkey
+* Absolute or relative pointer movement
 * LAN discovery
+* Optional local screen blanking on input capture
+* Tolerance of poor network conditions
+* Optional password protection and encryption
 
 ## Install
 
