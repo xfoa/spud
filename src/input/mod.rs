@@ -9,7 +9,7 @@ mod inject_macos;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-mod macos_keycodes;
+pub mod macos_keycodes;
 
 #[cfg(target_os = "linux")]
 mod wayland;
@@ -46,6 +46,7 @@ pub struct WaylandHandles {
     pub surface: usize,
 }
 
+#[cfg(target_os = "linux")]
 pub fn extract_wayland_handles(window: &dyn iced::Window) -> Option<WaylandHandles> {
     use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -58,6 +59,11 @@ pub fn extract_wayland_handles(window: &dyn iced::Window) -> Option<WaylandHandl
         _ => return None,
     };
     Some(WaylandHandles { display, surface })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn extract_wayland_handles(_window: &dyn iced::Window) -> Option<WaylandHandles> {
+    None
 }
 
 pub fn listen(hotkey: String) -> BoxStream<'static, InputEvent> {
@@ -106,6 +112,7 @@ pub fn toggle_wayland_grab() -> bool {
     false
 }
 
+#[cfg(target_os = "linux")]
 pub fn is_wayland_grabbed() -> bool {
     wayland::signal().is_grabbed()
 }

@@ -384,6 +384,7 @@ impl Spud {
                     .map(Message::WaylandHandlesReady)
             }
             Message::WaylandHandlesReady(handles) => {
+                #[cfg(target_os = "linux")]
                 if handles.is_some() {
                     eprintln!("[spud] Wayland handles acquired");
                 } else {

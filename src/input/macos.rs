@@ -7,13 +7,12 @@ use core_graphics::event::{
     CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventType, EventField, KeyCode,
 };
-use iced::futures::channel::mpsc;
 use iced::futures::Stream;
 
 use crate::input::InputEvent;
 
 pub fn listen(hotkey: String) -> impl Stream<Item = InputEvent> + Send + 'static {
-    iced::stream::channel(256, move |mut output| async move {
+    iced::stream::channel(256, move |mut output: iced::futures::channel::mpsc::Sender<InputEvent>| async move {
         let hotkey = hotkey.clone();
         thread::spawn(move || {
             let (tx, rx) = std::sync::mpsc::channel::<InputEvent>();
@@ -68,6 +67,7 @@ fn run(
         CGEventType::ScrollWheel,
     ];
 
+    let tx2 = tx.clone();
     let tap = CGEventTap::new(
         CGEventTapLocation::HID,
         CGEventTapPlacement::HeadInsertEventTap,
@@ -98,7 +98,7 @@ fn run(
                     } else {
                         let _ = CGDisplay::main().show_cursor();
                     }
-                    let _ = tx.send(InputEvent::HotkeyToggled {
+                    let _ = tx2.send(InputEvent::HotkeyToggled {
                         grabbed: new_grabbed,
                     });
                     return CallbackResult::Drop;
@@ -173,7 +173,7 @@ fn run(
             };
 
             if let Some(ie) = input_event {
-                let _ = tx.send(ie);
+                let _ = tx2.send(ie);
             }
 
             // Drop all grabbed events so they don't reach local applications.

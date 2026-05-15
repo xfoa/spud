@@ -1,12 +1,13 @@
+use std::collections::HashSet;
 use std::io;
 use std::sync::mpsc::{self, Sender as MpscSender};
 use std::thread::{self, JoinHandle};
 
 use core_graphics::display::CGDisplay;
 use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
-    CGEventType, CGMouseButton, EventField,
+    CGEvent, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
 };
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
 
 use crate::input::key_names;
@@ -51,18 +52,13 @@ impl InputInjector {
                 )
             });
 
+            let mut pressed_buttons: HashSet<u8> = HashSet::new();
+
             while let Ok(cmd) = rx.recv() {
                 match cmd {
                     InjectCmd::MouseAbs { x, y } => {
                         cursor = CGPoint::new(f64::from(x), f64::from(y));
-                        if let Ok(event) = CGEvent::new_mouse_event(
-                            source.clone(),
-                            CGEventType::MouseMoved,
-                            cursor,
-                            CGMouseButton::Left,
-                        ) {
-                            event.post(CGEventTapLocation::HID);
-                        }
+                        post_mouse_move(&source, cursor, &pressed_buttons);
                     }
                     InjectCmd::MouseRel { dx, dy } => {
                         cursor.x += f64::from(dx);
@@ -72,14 +68,7 @@ impl InputInjector {
                         let bounds = main.bounds();
                         cursor.x = cursor.x.clamp(bounds.origin.x, bounds.origin.x + bounds.size.width);
                         cursor.y = cursor.y.clamp(bounds.origin.y, bounds.origin.y + bounds.size.height);
-                        if let Ok(event) = CGEvent::new_mouse_event(
-                            source.clone(),
-                            CGEventType::MouseMoved,
-                            cursor,
-                            CGMouseButton::Left,
-                        ) {
-                            event.post(CGEventTapLocation::HID);
-                        }
+                        post_mouse_move(&source, cursor, &pressed_buttons);
                     }
                     InjectCmd::KeyDown { code } => {
                         if let Some(keycode) = macos_keycodes::evdev_to_macos(code) {
@@ -104,9 +93,11 @@ impl InputInjector {
                         }
                     }
                     InjectCmd::ButtonDown { code } => {
+                        pressed_buttons.insert(code as u8);
                         post_mouse_button(&source, &mut cursor, code, true);
                     }
                     InjectCmd::ButtonUp { code } => {
+                        pressed_buttons.remove(&(code as u8));
                         post_mouse_button(&source, &mut cursor, code, false);
                     }
                     InjectCmd::Wheel { dx, dy } => {
@@ -171,6 +162,35 @@ impl InputInjector {
 fn get_cursor_position(source: &CGEventSource) -> Option<CGPoint> {
     let event = CGEvent::new(source.clone()).ok()?;
     Some(event.location())
+}
+
+fn current_drag_type(pressed_buttons: &HashSet<u8>) -> Option<(CGEventType, CGMouseButton)> {
+    if pressed_buttons.contains(&1) {
+        Some((CGEventType::LeftMouseDragged, CGMouseButton::Left))
+    } else if pressed_buttons.contains(&3) {
+        Some((CGEventType::RightMouseDragged, CGMouseButton::Right))
+    } else if pressed_buttons.contains(&2) {
+        Some((CGEventType::OtherMouseDragged, CGMouseButton::Center))
+    } else {
+        None
+    }
+}
+
+fn post_mouse_move(source: &CGEventSource, cursor: CGPoint, pressed_buttons: &HashSet<u8>) {
+    if let Some((event_type, button)) = current_drag_type(pressed_buttons) {
+        if let Ok(event) = CGEvent::new_mouse_event(source.clone(), event_type, cursor, button) {
+            event.post(CGEventTapLocation::HID);
+        }
+    } else if let Ok(event) = CGEvent::new_mouse_event(
+        source.clone(),
+        CGEventType::MouseMoved,
+        cursor,
+        CGMouseButton::Left,
+    ) {
+        event.post(CGEventTapLocation::HID);
+    }
+    // Warp the hardware cursor so the Dock / hot corners trigger.
+    let _ = CGDisplay::warp_mouse_cursor_position(cursor);
 }
 
 fn post_mouse_button(source: &CGEventSource, cursor: &mut CGPoint, wire: u16, pressed: bool) {

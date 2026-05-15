@@ -14,11 +14,12 @@ mod theme;
 mod views;
 
 fn main() -> iced::Result {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 2 && args[1] == "injection-helper" {
-        let socket_path = args.get(2).cloned().unwrap_or_else(|| "/tmp/spud-input.sock".to_string());
-        let screen_width = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1920);
-        let screen_height = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1080);
+    let _args: Vec<String> = std::env::args().collect();
+    #[cfg(target_os = "linux")]
+    if _args.len() >= 2 && _args[1] == "injection-helper" {
+        let socket_path = _args.get(2).cloned().unwrap_or_else(|| "/tmp/spud-input.sock".to_string());
+        let screen_width = _args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1920);
+        let screen_height = _args.get(4).and_then(|s| s.parse().ok()).unwrap_or(1080);
         if let Err(e) = input::helper::run(&socket_path, screen_width, screen_height) {
             eprintln!("[spud-injection-helper] failed: {e}");
             std::process::exit(1);
@@ -42,7 +43,7 @@ fn main() -> iced::Result {
     )
     .ok();
 
-    let app_name = "Spud";
+    let _app_name = "Spud";
     iced::application(app::Spud::default, app::Spud::update, app::Spud::view)
         .title(app::Spud::title)
         .theme(app::Spud::theme)
@@ -52,10 +53,7 @@ fn main() -> iced::Result {
         .window(iced::window::Settings {
             icon,
             min_size: Some(iced::Size::new(800.0, 600.0)),
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: app_name.to_string(),
-                ..PlatformSpecific::default()
-            },
+            platform_specific: PlatformSpecific::default(),
             ..Default::default()
         })
         .run()
