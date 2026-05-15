@@ -243,18 +243,20 @@ title SetCaptureMode (2 bytes)
 
 ## UDP input plane
 
-Each datagram carries a **batch** of events. Batching amortises the fixed
-UDP/IP header overhead (28 bytes) and `ConnId` prefix across multiple events,
-which is critical for high-frequency traffic like mouse movement.
+Only **mouse movement** events (`MouseMove` and `MouseAbs`) are batched. All
+other events (key presses, mouse buttons, wheel, heartbeats) are sent
+immediately as single-event datagrams. Batching amortises the fixed UDP/IP
+header overhead (28 bytes) and `ConnId` prefix across multiple events, which is
+critical for high-frequency traffic like mouse movement.
 
-The client buffers events for up to 1 ms or until the configured batch size
-(1-20, default 8) accumulates, whichever comes first.
+The client buffers mouse events for up to 1 ms or until the configured batch
+size (1-20, default 8) accumulates, whichever comes first.
 
 Optionally, the client may append **redundant batches** (0-10, configurable) to
-each datagram. These are previously sent batches included for reliability on
-lossy networks. Each batch is self-describing with its own `count` byte, so a
-server that does not yet use redundancy can simply read the first batch and
-ignore the trailing data.
+each mouse datagram. These are previously sent mouse batches included for
+reliability on lossy networks. Each batch is self-describing with its own
+`count` byte, so a server that does not yet use redundancy can simply read the
+first batch and ignore the trailing data.
 
 ### Plaintext datagram layout
 
@@ -275,11 +277,12 @@ title Single batch payload (example: count = 2)
 48-87: "Event 1 (5 bytes)"
 ```
 
-* `count`: number of events in this batch (up to 20).
+* `count`: number of events in this batch (up to 20 for mouse, always 1 for
+  keys, buttons, wheel, and keepalive).
 * `event`: 5-byte fixed-size encoded event.
 * The first batch is the current one. Subsequent batches are optional redundant
-  history appended by the client. A server reads `count`, consumes
-  `count * 5` bytes, and ignores the rest.
+  history appended by the client for mouse movement datagrams only. A server
+  reads `count`, consumes `count * 5` bytes, and ignores the rest.
 
 ### Encrypted datagram layout
 
@@ -337,9 +340,11 @@ All multi-byte fields are little-endian. Unused trailing bytes are zero.
 * `Wheel`: discrete scroll deltas. Lines are passed through; pixel deltas are
   divided by 10. Both axes are clamped to `i8` range.
 * `KeyRepeat`: sent by the client over UDP as a heartbeat for held keys.
+  Not batched.
 * `MouseButtonRepeat`: sent by the client over UDP as a heartbeat for held
-  mouse buttons.
+  mouse buttons. Not batched.
 * `Keepalive`: sent by the client over UDP as a lightweight liveness signal.
+  Not batched.
 
 Events from an unknown `ConnId` are silently dropped.
 
@@ -398,14 +403,15 @@ The client maintains `pressed_keys: HashSet<u16>` and
 `pressed_mouse_buttons: HashSet<u8>`.
 
 * On a native key press event, if the code is not already in `pressed_keys`,
-  insert it and send `KeyDown`. If it is already present (OS auto-repeat), the
-  event is suppressed.
-* On a native key release event, remove the code and send `KeyUp`.
-* Mouse buttons are deduplicated the same way using `pressed_mouse_buttons`.
+  insert it and send `KeyDown` immediately. If it is already present (OS
+  auto-repeat), the event is suppressed.
+* On a native key release event, remove the code and send `KeyUp` immediately.
+* Mouse buttons are deduplicated the same way using `pressed_mouse_buttons`
+  and sent immediately.
 * Every `key_repeat_interval_ms` (configurable on the client, default 250 ms)
   while a session is active, send `KeyRepeat` for every code in `pressed_keys`
-  and `MouseButtonRepeat` for every button in `pressed_mouse_buttons`. This is
-  the only source of repeat traffic.
+  and `MouseButtonRepeat` for every button in `pressed_mouse_buttons`. These
+  are sent immediately and are not batched.
 * On `Disconnect` or `ConnectionLost`, clear both sets.
 
 This keeps held-key traffic at a configurable rate (default 4 packets per
@@ -417,9 +423,10 @@ some dropped UDP datagrams before the server times the key out.
 * In **hotkey mode** (fullscreen capture), motion comes from the relative
   pointer protocol via the dedicated input thread on Wayland, or from delta
   calculations against the previous position on X11. `MouseMove` events are
-  sent.
+  batched and sent according to the configured batch size and redundancy.
 * In **window mode** (focus capture), the client sends `MouseAbs` coordinates
-  normalised to `0..65535` based on the local window size.
+  normalised to `0..65535` based on the local window size. `MouseAbs` events
+  are also batched.
 * The first `CursorMoved` after `CursorEntered` is suppressed when computing
   deltas because there is no prior reference.
 * Buttons and wheel events are translated directly. Wheel deltas from the
