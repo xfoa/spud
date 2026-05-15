@@ -1529,7 +1529,7 @@ impl State {
         let key_repeat_field = column![
             text("Key repeat interval").size(16).color(mt::ON_SURFACE),
             ui::v_space(4.0),
-            ui::helper_text("Lower values make the server less likely to time out held keys un unreliable networks but increase overhead."),
+            ui::helper_text("Lower values make the server less likely to time out held keys on unreliable networks, but increase overhead."),
             ui::v_space(16.0),
             key_repeat_row,
         ]
@@ -1557,9 +1557,9 @@ impl State {
         .align_y(iced::Alignment::Center);
 
         let batch_size_field = column![
-            text("Mouse event max batch size").size(16).color(mt::ON_SURFACE),
+            text("Mouse movement max batch size").size(16).color(mt::ON_SURFACE),
             ui::v_space(4.0),
-            ui::helper_text("Higher decreases UDP overhead but may cause slight lag at lower pointer speeds."),
+            ui::helper_text("Higher values decrease UDP overhead but may cause slight lag at lower pointer speeds."),
             ui::v_space(16.0),
             batch_size_row,
         ]
