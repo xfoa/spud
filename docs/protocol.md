@@ -78,6 +78,18 @@ Sent by the server immediately after the TLS handshake completes (and after any
 authentication, if implemented). This is the only message required to begin a
 session.
 
+```mermaid
+packet-beta
+title SessionInit (31 bytes)
+0-7: "Variant (u8)"
+8-71: "conn_id (u64 LE)"
+72-199: "uuid (16 bytes)"
+200-207: "encrypt (bool)"
+208-215: "auth (bool)"
+216-231: "screen_width (u16 LE)"
+232-247: "screen_height (u16 LE)"
+```
+
 * `conn_id`: opaque 64-bit session identifier. The client must include this in
   every UDP datagram.
 * `uuid`: 128-bit session UUID (reserved for future use).
@@ -92,7 +104,13 @@ session.
 
 Sent periodically (every 30 s) by the client over the TLS stream to keep the
 session alive. The server monitors the stream for EOF and checks idle timeout
-every 60 s. The payload is empty except for the `ControlMsg` tag.
+every 60 s.
+
+```mermaid
+packet-beta
+title Keepalive (1 byte)
+0-7: "Variant (u8)"
+```
 
 Either side closing the TLS connection terminates the session.
 
@@ -100,15 +118,29 @@ Either side closing the TLS connection terminates the session.
 
 Sent when the server has `require_auth` enabled and a passphrase is configured.
 
+```mermaid
+packet-beta
+title AuthChallenge (49 bytes)
+0-7: "Variant (u8)"
+8-255: "nonce (32 bytes)"
+256-383: "salt (16 bytes)"
+```
+
 * `nonce`: 32 random bytes.
-* `salt`: The base64-encoded Argon2id salt extracted from the server's stored
-  PHC hash. The client re-hashes the user's plaintext passphrase with this salt.
+* `salt`: 16 raw bytes (the Argon2id salt decoded from base64).
 
 The client must respond with an `AuthResponse` within 10 seconds.
 
 #### `AuthResponse` (client -> server)
 
 Sent by the client in reply to `AuthChallenge`.
+
+```mermaid
+packet-beta
+title AuthResponse (33 bytes)
+0-7: "Variant (u8)"
+8-255: "hmac (32 bytes)"
+```
 
 * `hmac`: HMAC-SHA256 of the 32-byte nonce. The key is the Argon2id hash output
   derived from the user's plaintext passphrase and the salt from `AuthChallenge`.
@@ -117,11 +149,33 @@ Sent by the client in reply to `AuthChallenge`.
 
 Sent after the server verifies the client's `AuthResponse`.
 
+```mermaid
+packet-beta
+title AuthResult (2 bytes)
+0-7: "Variant (u8)"
+8-15: "ok (bool)"
+```
+
 * `ok: true` -- authentication succeeded. The server sends `SessionInit` next.
 * `ok: false` -- authentication failed. The server closes the TLS connection.
 
 If the server does not require auth, it skips `AuthChallenge`/`AuthResponse`
 and sends `SessionInit` immediately after the TLS handshake.
+
+#### `SetCaptureMode` (client -> server)
+
+Sent by the client when the capture mode changes (e.g. switching between
+fullscreen and window mode).
+
+```mermaid
+packet-beta
+title SetCaptureMode (2 bytes)
+0-7: "Variant (u8)"
+8-15: "window_mode (bool)"
+```
+
+* `window_mode`: `true` when the client is in windowed/focus capture mode;
+  `false` when in fullscreen/hotkey capture mode.
 
 ### Lifecycle
 
@@ -170,14 +224,18 @@ title UDP datagram (plaintext)
 0-63: "ConnId (u64 LE)"
 ```
 
-After the 8-byte `ConnId`, the payload is a sequence of self-describing batches:
+After the 8-byte `ConnId`, the payload is a sequence of self-describing batches.
+Each batch has the same layout:
 
-```
-[count: u8][event0: 5 bytes][event1: 5 bytes]...
-[count_prev1: u8][event0: 5 bytes]...
+```mermaid
+packet-beta
+title Single batch payload (example: count = 2)
+0-7: "Count (u8)"
+8-47: "Event 0 (5 bytes)"
+48-87: "Event 1 (5 bytes)"
 ```
 
-* `count`: number of events in this batch.
+* `count`: number of events in this batch (up to 20).
 * `event`: 5-byte fixed-size encoded event.
 * The first batch is the current one. Subsequent batches are optional redundant
   history appended by the client. A server reads `count`, consumes
@@ -202,8 +260,14 @@ by any redundant batches.
 
 Each event is exactly **5 bytes** (fixed-size for simple parsing):
 
-```
-[tag: u8][data0: u8][data1: u8][data2: u8][data3: u8]
+```mermaid
+packet-beta
+title Event (5 bytes)
+0-7: "Tag (u8)"
+8-15: "Data0 (u8)"
+16-23: "Data1 (u8)"
+24-31: "Data2 (u8)"
+32-39: "Data3 (u8)"
 ```
 
 | Tag | Event | Data layout |

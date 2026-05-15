@@ -76,6 +76,18 @@ pub fn extract_salt(hash: &str) -> Option<String> {
     PasswordHash::new(hash).ok()?.salt.map(|s| s.as_str().to_string())
 }
 
+pub fn decode_salt_bytes(b64: &str) -> Option<[u8; 16]> {
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    let mut buf = [0u8; 16];
+    Base64UrlUnpadded::decode(b64, &mut buf).ok()?;
+    Some(buf)
+}
+
+pub fn encode_salt_bytes(raw: &[u8; 16]) -> String {
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    Base64UrlUnpadded::encode_string(raw)
+}
+
 pub fn hash_passphrase_with_salt(passphrase: &str, salt: &str) -> Option<String> {
     let argon2 = Argon2::default();
     let salt = SaltString::from_b64(salt).ok()?;

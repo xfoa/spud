@@ -528,8 +528,9 @@ impl ClientConnection {
                     "Server requires authentication but it is disabled on this client",
                 ));
             }
+            let salt_b64 = crate::config::encode_salt_bytes(&salt);
             let hmac = match saved_phc {
-                Some(ref phc) => match crate::net::auth::client_compute_response_from_phc(phc, &salt, &nonce) {
+                Some(ref phc) => match crate::net::auth::client_compute_response_from_phc(phc, &salt_b64, &nonce) {
                     Some(hmac) => {
                         phc_to_save = Some(phc.clone());
                         Some(hmac)
@@ -545,8 +546,8 @@ impl ClientConnection {
                     let passphrase = passphrase.ok_or_else(|| {
                         io::Error::new(io::ErrorKind::PermissionDenied, "Authentication required but no passphrase provided")
                     })?;
-                    phc_to_save = crate::config::hash_passphrase_with_salt(&passphrase, &salt);
-                    crate::net::auth::client_compute_response(&passphrase, &salt, &nonce)
+                    phc_to_save = crate::config::hash_passphrase_with_salt(&passphrase, &salt_b64);
+                    crate::net::auth::client_compute_response(&passphrase, &salt_b64, &nonce)
                         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Authentication error: failed to compute auth response"))?
                 }
             };
