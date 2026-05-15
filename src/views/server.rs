@@ -51,6 +51,7 @@ pub enum Message {
     NameChanged(String),
     KeyTimeoutChanged(u16),
     EncryptUdpToggled(bool),
+    BatchHistoryMultiplierChanged(u8),
 }
 
 #[derive(Clone, PartialEq)]
@@ -64,6 +65,7 @@ struct RunningConfig {
     icon: ServerIcon,
     key_timeout_ms: u16,
     encrypt_udp: bool,
+    batch_history_multiplier: u8,
 }
 
 pub struct State {
@@ -84,6 +86,7 @@ pub struct State {
     key_timeout_ms: u16,
     last_error: Option<String>,
     encrypt_udp: bool,
+    batch_history_multiplier: u8,
 }
 
 impl Default for State {
@@ -121,6 +124,7 @@ impl State {
             listener: None,
             last_error: None,
             encrypt_udp: cfg.encrypt_udp,
+            batch_history_multiplier: cfg.batch_history_multiplier,
         }
     }
 
@@ -135,6 +139,7 @@ impl State {
             passphrase_hash: self.passphrase_hash.clone(),
             key_timeout_ms: self.key_timeout_ms,
             encrypt_udp: self.encrypt_udp,
+            batch_history_multiplier: self.batch_history_multiplier,
         }
     }
 }
@@ -151,6 +156,7 @@ impl State {
             icon: self.icon,
             key_timeout_ms: self.key_timeout_ms,
             encrypt_udp: self.encrypt_udp,
+            batch_history_multiplier: self.batch_history_multiplier,
         }
     }
 
@@ -196,6 +202,7 @@ impl State {
                 self.require_auth,
                 self.passphrase_hash.clone(),
                 self.encrypt_udp,
+                self.batch_history_multiplier,
             )
         )?;
         self.listener = Some(listener);
@@ -267,6 +274,9 @@ impl State {
                 self.key_timeout_ms = (v / 50) * 50;
             }
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
+            Message::BatchHistoryMultiplierChanged(v) => {
+                self.batch_history_multiplier = v.max(1);
+            }
         }
     }
 
@@ -687,7 +697,7 @@ impl State {
     }
 
     fn advanced_page(&self) -> Element<'_, Message> {
-        let slider_row = row![
+        let timeout_slider = row![
             slider(50..=2000, self.key_timeout_ms, Message::KeyTimeoutChanged)
                 .width(Length::Fill),
             ui::h_space(12.0),
@@ -697,10 +707,28 @@ impl State {
 
         let timeout_field = column![
             ui::field_label("Key hold timeout"),
-            slider_row,
+            timeout_slider,
             ui::v_space(4.0),
             ui::helper_text(
                 "Compensates for lost release event packets. Higher values may give smoother performance reliable network conditions, but higher release latency."
+            ),
+        ]
+        .spacing(6);
+
+        let multiplier_slider = row![
+            slider(1..=10, self.batch_history_multiplier, Message::BatchHistoryMultiplierChanged)
+                .width(Length::Fill),
+            ui::h_space(12.0),
+            text(format!("{}", self.batch_history_multiplier)).size(14).color(mt::ON_SURFACE),
+        ]
+        .align_y(iced::Alignment::Center);
+
+        let multiplier_field = column![
+            ui::field_label("Redundancy history multiplier"),
+            multiplier_slider,
+            ui::v_space(4.0),
+            ui::helper_text(
+                "Multiplies the client's batch size and redundancy to determine how many past mouse events the server remembers for deduplication."
             ),
         ]
         .spacing(6);
@@ -710,6 +738,8 @@ impl State {
                 ui::card_title("Performance"),
                 ui::v_space(12.0),
                 timeout_field,
+                ui::v_space(16.0),
+                multiplier_field,
             ]
             .spacing(0),
         );

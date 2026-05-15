@@ -108,6 +108,7 @@ pub struct ServerConfig {
     pub passphrase_hash: String,
     pub key_timeout_ms: u16,
     pub encrypt_udp: bool,
+    pub batch_history_multiplier: u8,
 }
 
 impl Default for ServerConfig {
@@ -122,6 +123,7 @@ impl Default for ServerConfig {
             passphrase_hash: String::new(),
             key_timeout_ms: 1000,
             encrypt_udp: true,
+            batch_history_multiplier: 4,
         }
     }
 }

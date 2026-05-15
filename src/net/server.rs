@@ -34,6 +34,7 @@ impl ServerListener {
         require_auth: bool,
         passphrase_hash: String,
         encrypt_udp: bool,
+        batch_history_multiplier: u8,
     ) -> io::Result<Self> {
         let (cert, key) = crate::cert::load_or_generate_certs()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -79,9 +80,9 @@ impl ServerListener {
         let cancel = CancellationToken::new();
         let c = cancel.clone();
         #[cfg(target_os = "linux")]
-        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, injector, c));
+        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, injector, c, batch_history_multiplier));
         #[cfg(not(target_os = "linux"))]
-        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, c));
+        let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, c, batch_history_multiplier));
 
         Ok(Self {
             shutdown,
@@ -222,6 +223,7 @@ async fn run_server(
     #[cfg(target_os = "linux")]
     injector: Arc<OnceLock<crate::input::InputInjector>>,
     cancel: CancellationToken,
+    batch_history_multiplier: u8,
 ) {
     let mut buf = vec![0u8; 2048];
     let mut sweep_interval = tokio::time::interval(Duration::from_millis(200));
@@ -236,7 +238,7 @@ async fn run_server(
                         let hash = passphrase_hash.clone();
                         let child_cancel = cancel.child_token();
                         tokio::spawn(handle_client(
-                            stream, peer, acceptor, sessions, require_auth, hash, encrypt_udp, key_timeout_ms, child_cancel, screen_width, screen_height,
+                            stream, peer, acceptor, sessions, require_auth, hash, encrypt_udp, key_timeout_ms, child_cancel, screen_width, screen_height, batch_history_multiplier,
                         ));
                     }
                     Err(e) => {
@@ -296,8 +298,42 @@ async fn run_server(
 
                             if let Some(pt) = plaintext {
                                 session.record_decrypt_success();
-                                if let Some((events, _)) = crate::net::Event::decode_batch(&pt) {
-                                    for event in &events {
+                                let batches = crate::net::Event::decode_all_batches(&pt);
+                                if !batches.is_empty() {
+                                    // Process redundant batches in ascending order (oldest first).
+                                    // Wire order is: [current][newest_redundant]...[oldest_redundant],
+                                    // so redundant batches are batches[1..] with newest at index 1.
+                                    // Ascending = oldest first = iterate in reverse.
+                                    #[cfg(target_os = "linux")]
+                                    let is_localhost = src.ip().is_loopback();
+                                    for batch in batches[1..].iter().rev() {
+                                        if session.mouse_history.contains(batch.seq_base) {
+                                            continue;
+                                        }
+                                        for event in &batch.events {
+                                            #[cfg(target_os = "linux")]
+                                            if let Some(inj) = injector.get() {
+                                                if !is_localhost {
+                                                    match event {
+                                                        crate::net::Event::MouseMove { dx, dy } => {
+                                                            inj.move_rel(i32::from(*dx), i32::from(*dy));
+                                                        }
+                                                        crate::net::Event::MouseAbs { x, y } => {
+                                                            let px = (*x as i32 * (i32::from(session.screen_width) - 1) + 32767) / 65535;
+                                                            let py = (*y as i32 * (i32::from(session.screen_height) - 1) + 32767) / 65535;
+                                                            inj.move_abs(px, py);
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        session.mouse_history.push(batch.seq_base);
+                                    }
+
+                                    // Process primary (current) batch fully.
+                                    let primary = &batches[0];
+                                    for event in &primary.events {
                                         // If a repeat arrives without a prior down (lost packet),
                                         // inject the synthetic down before handling the repeat.
                                         let needs_key_down = matches!(
@@ -319,7 +355,6 @@ async fn run_server(
                                         }
                                         #[cfg(target_os = "linux")]
                                         if let Some(inj) = injector.get() {
-                                            let is_localhost = src.ip().is_loopback();
                                             if !is_localhost {
                                                 if needs_key_down {
                                                     if let crate::net::Event::KeyRepeat(code) = event {
@@ -365,6 +400,15 @@ async fn run_server(
                                             }
                                         }
                                     }
+                                    // Track the primary batch so future redundant copies are skipped.
+                                    // Only mouse batches are sent redundantly; non-mouse primaries use seq_base=0
+                                    // and are not redundantly transmitted, so skip those.
+                                    let is_mouse_batch = primary.events.iter().any(|e| {
+                                        matches!(e, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. })
+                                    });
+                                    if is_mouse_batch {
+                                        session.mouse_history.push(primary.seq_base);
+                                    }
                                 }
                             } else if session.encrypt {
                                 should_remove = session.record_decrypt_failure();
@@ -402,6 +446,7 @@ async fn handle_client(
     cancel: CancellationToken,
     screen_width: u16,
     screen_height: u16,
+    batch_history_multiplier: u8,
 ) {
     let tls = match acceptor.accept(stream).await {
         Ok(tls) => tls,
@@ -516,6 +561,13 @@ async fn handle_client(
                                     if let Some(mut s) = sessions.get_mut(&conn_id) {
                                         s.window_mode = window_mode;
                                         println!("[server] conn {conn_id} capture mode: {}", if window_mode { "window" } else { "fullscreen" });
+                                    }
+                                }
+                                ControlMsg::SetBatchConfig { max_batch, batch_redundancy } => {
+                                    if let Some(mut s) = sessions.get_mut(&conn_id) {
+                                        let capacity = max_batch as usize * batch_redundancy as usize * batch_history_multiplier as usize;
+                                        s.mouse_history.resize(capacity);
+                                        println!("[server] conn {conn_id} batch config: max_batch={max_batch} redundancy={batch_redundancy} history_capacity={capacity}");
                                     }
                                 }
                                 _ => {}

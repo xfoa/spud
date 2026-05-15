@@ -108,6 +108,14 @@ title SetCaptureMode (2 bytes)
 
 ```mermaid
 packet-beta
+title SetBatchConfig (3 bytes)
+0-7: "Variant (u8)"
+8-15: "max_batch (u8)"
+16-23: "batch_redundancy (u8)"
+```
+
+```mermaid
+packet-beta
 title Keepalive (1 byte)
 0-7: "Variant (u8)"
 ```
@@ -217,6 +225,23 @@ title SetCaptureMode (2 bytes)
 * `window_mode`: `true` when the client is in windowed/focus capture mode;
   `false` when in fullscreen/hotkey capture mode.
 
+#### `SetBatchConfig` (client -> server)
+
+Sent by the client after receiving `SessionInit` and whenever the client's
+batch settings change while connected. The server uses these values to size its
+deduplication history window:
+
+```
+history_capacity = max_batch * batch_redundancy * batch_history_multiplier
+```
+
+* `max_batch`: the client's configured mouse batch size (1-20).
+* `batch_redundancy`: the number of historical batches the client appends to
+each mouse datagram (0-10).
+
+The `batch_history_multiplier` is a server-side setting (default 4, range 1-10)
+in Advanced settings.
+
 ### Lifecycle
 
 1. Client resolves `host:port` and opens a TCP connection within the connect
@@ -230,15 +255,17 @@ title SetCaptureMode (2 bytes)
 4. Server sends `SessionInit` containing the session parameters.
 5. Client validates `SessionInit.encrypt` against its local preference. If they
    differ, the client aborts the connection.
-6. Client binds a UDP socket and may begin sending event datagrams tagged with
+6. Client sends `SetBatchConfig` with its current `max_batch` and
+   `batch_redundancy`.
+7. Client binds a UDP socket and may begin sending event datagrams tagged with
    `conn_id`.
-7. The client enters a keepalive loop, sending `Keepalive` over TLS every
+8. The client enters a keepalive loop, sending `Keepalive` over TLS every
    30 s. The server monitors the stream for EOF and checks session idle time
    every 60 s; if a session is idle for more than `SESSION_TIMEOUT` (300 s)
    it is closed.
-8. When the TLS stream closes, the server removes the session from its table;
+9. When the TLS stream closes, the server removes the session from its table;
    subsequent UDP packets with that `conn_id` are dropped.
-9. The client surfaces a TLS EOF or read error as a `Disconnected` event in the
+10. The client surfaces a TLS EOF or read error as a `Disconnected` event in the
    UI.
 
 ## UDP input plane
@@ -273,16 +300,26 @@ Each batch has the same layout:
 packet-beta
 title Single batch payload (example: count = 2)
 0-7: "Count (u8)"
-8-47: "Event 0 (5 bytes)"
-48-87: "Event 1 (5 bytes)"
+8-23: "seq_base (u16 LE)"
+24-63: "Event 0 (5 bytes)"
+64-103: "Event 1 (5 bytes)"
 ```
 
 * `count`: number of events in this batch (up to 20 for mouse, always 1 for
   keys, buttons, wheel, and keepalive).
+* `seq_base`: the sequence number of the first event in this batch. Event *i*
+  has implicit sequence number `seq_base + i` (wrapping `u16` arithmetic).
+  Used by the server for batch-level deduplication of redundant history.
 * `event`: 5-byte fixed-size encoded event.
 * The first batch is the current one. Subsequent batches are optional redundant
   history appended by the client for mouse movement datagrams only. A server
-  reads `count`, consumes `count * 5` bytes, and ignores the rest.
+  reads `count`, consumes `2 + count * 5` bytes, and continues to the next batch.
+
+> **Note**: this batch format is not backward-compatible with earlier revisions
+> that omitted `seq_base`. Parsers expecting the old `[count: u8][events...]`
+> layout will misread `seq_base` as event data. The ALPN identifier (`spud/1`)
+> should be bumped if interoperability with pre-redundancy implementations is
+> required.
 
 ### Encrypted datagram layout
 
@@ -296,8 +333,8 @@ title UDP datagram (encrypted)
 
 After the 28-byte header, the remainder of the datagram is the
 **AES-256-GCM ciphertext** (variable length). The ciphertext decrypts to the
-same batch-payload format used in plaintext: `[count: u8][events...]` followed
-by any redundant batches.
+same batch-payload format used in plaintext: `[count: u8][seq_base: u16 LE][events...]`
+followed by any redundant batches.
 
 ### Compact event encoding
 
@@ -346,8 +383,6 @@ All multi-byte fields are little-endian. Unused trailing bytes are zero.
 * `Keepalive`: sent by the client over UDP as a lightweight liveness signal.
   Not batched.
 
-Events from an unknown `ConnId` are silently dropped.
-
 ## Key encoding
 
 Keys are transmitted as raw **Linux evdev scancodes** (`u16`), not strings.
@@ -362,6 +397,32 @@ The client maps physical keys to scancodes using a platform-specific table:
 The server receives the `u16` scancode and passes it straight to the Linux
 input subsystem (`/dev/uinput` or the privileged helper), so no string parsing
 is required on the hot path.
+
+## Server redundancy deduplication
+
+When the client appends redundant batches to a mouse datagram, the server
+processes them in ascending chronological order (oldest first) before handling
+the primary batch.
+
+For each redundant batch:
+1. Look up the batch's `seq_base` in a 65536-bit bitmap.
+2. If the bit is set, the entire batch has already been injected; skip it.
+3. If the bit is clear, inject all events in the batch and set the bit.
+
+For the primary (current) batch:
+1. Inject all events in the batch unconditionally.
+2. If the batch contains mouse events, set its `seq_base` bit in the bitmap.
+
+The bitmap is paired with a fixed-size circular buffer that tracks which
+sequence numbers are currently set. When the buffer is full, the oldest entry
+is dequeued and its bit is cleared. This provides O(1) check and update with
+constant memory. The buffer size is:
+
+```
+capacity = max_batch * batch_redundancy * batch_history_multiplier
+```
+
+where `batch_history_multiplier` is a server-side setting (default 4).
 
 ## Server input state machine
 

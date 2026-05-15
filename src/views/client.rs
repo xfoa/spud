@@ -282,6 +282,10 @@ impl State {
                 sender.send_control(ControlMsg::SetCaptureMode {
                     window_mode: mode,
                 });
+                sender.send_control(ControlMsg::SetBatchConfig {
+                    max_batch: self.mouse_batch_size,
+                    batch_redundancy: self.batch_redundancy,
+                });
                 self.sender = Some(sender);
                 self.connected = true;
                 self.connecting = false;
@@ -358,6 +362,10 @@ impl State {
                     println!("[client] Mouse scale: x={:.2}, y={:.2}", scale.0, scale.1);
                     sender.send_control(ControlMsg::SetCaptureMode {
                         window_mode: self.capture_mode == CaptureMode::Window,
+                    });
+                    sender.send_control(ControlMsg::SetBatchConfig {
+                        max_batch: self.mouse_batch_size,
+                        batch_redundancy: self.batch_redundancy,
                     });
                     self.sender = Some(sender);
                     self.connected = true;
@@ -565,11 +573,24 @@ impl State {
             Message::BlankScreenToggled(v) => self.blank_screen = v,
             Message::ShowHotkeyOnBlankToggled(v) => self.show_hotkey_on_blank = v,
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
-            Message::MouseBatchSizeChanged(v) => self.mouse_batch_size = v,
+            Message::MouseBatchSizeChanged(v) => {
+                self.mouse_batch_size = v;
+                if let Some(sender) = &self.sender {
+                    sender.set_mouse_batch_size(v);
+                    sender.send_control(ControlMsg::SetBatchConfig {
+                        max_batch: self.mouse_batch_size,
+                        batch_redundancy: self.batch_redundancy,
+                    });
+                }
+            }
             Message::BatchRedundancyChanged(v) => {
                 self.batch_redundancy = v;
                 if let Some(sender) = &self.sender {
                     sender.set_batch_redundancy(v);
+                    sender.send_control(ControlMsg::SetBatchConfig {
+                        max_batch: self.mouse_batch_size,
+                        batch_redundancy: self.batch_redundancy,
+                    });
                 }
             }
             Message::KeyRepeatIntervalChanged(v) => self.key_repeat_interval_ms = v,

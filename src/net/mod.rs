@@ -43,6 +43,13 @@ const TAG_MOUSE_BUTTON_REPEAT: u8 = 0x07;
 const TAG_WHEEL: u8 = 0x08;
 const TAG_KEEPALIVE: u8 = 0x09;
 
+/// A decoded batch including the sequence number base assigned by the sender.
+#[derive(Debug)]
+pub struct DecodedBatch {
+    pub events: Vec<Event>,
+    pub seq_base: u16,
+}
+
 /// Input event transmitted over the wire.
 ///
 /// Uses a compact 5-byte fixed encoding per event.
@@ -144,21 +151,30 @@ impl Event {
     }
 
     /// Encode a batch of events into a Vec.
-    /// Format: `[count: u8][event0: 5][event1: 5]...[count_prev1: u8][events...]...`
+    /// Format: `[count: u8][seq_base: u16 LE][event0: 5][event1: 5]...[count_prev1: u8][seq_base: u16 LE][events...]...`
     /// The `history` slices are appended after the current batch in reverse order
     /// (most recent first). The server can read just the first batch and ignore
     /// the trailing history.
-    pub fn encode_batch(events: &[Event], history: &std::collections::VecDeque<Vec<Event>>) -> Vec<u8> {
+    pub fn encode_batch(
+        events: &[Event],
+        seq_base: u16,
+        history: &std::collections::VecDeque<(Vec<Event>, u16)>,
+    ) -> Vec<u8> {
         let count = events.len().min(u8::MAX as usize) as u8;
-        let history_bytes: usize = history.iter().map(|b| 1 + b.len() * Self::ENCODED_SIZE).sum();
-        let mut buf = Vec::with_capacity(1 + count as usize * Self::ENCODED_SIZE + history_bytes);
+        let history_bytes: usize = history
+            .iter()
+            .map(|(b, _)| 1 + 2 + b.len() * Self::ENCODED_SIZE)
+            .sum();
+        let mut buf = Vec::with_capacity(1 + 2 + count as usize * Self::ENCODED_SIZE + history_bytes);
         buf.push(count);
+        buf.extend_from_slice(&seq_base.to_le_bytes());
         for event in events.iter().take(count as usize) {
             buf.extend_from_slice(&event.encode());
         }
-        for batch in history.iter().rev() {
+        for (batch, batch_seq) in history.iter().rev() {
             let c = batch.len().min(u8::MAX as usize) as u8;
             buf.push(c);
+            buf.extend_from_slice(&batch_seq.to_le_bytes());
             for event in batch.iter().take(c as usize) {
                 buf.extend_from_slice(&event.encode());
             }
@@ -166,24 +182,43 @@ impl Event {
         buf
     }
 
-    /// Decode a batch of events from a byte slice.
-    /// Returns the decoded events and the number of bytes consumed.
-    pub fn decode_batch(buf: &[u8]) -> Option<(Vec<Event>, usize)> {
-        if buf.is_empty() {
+    /// Decode a single batch from a byte slice.
+    /// Returns the decoded batch and the number of bytes consumed.
+    pub fn decode_batch(buf: &[u8]) -> Option<(DecodedBatch, usize)> {
+        if buf.len() < 1 + 2 {
             return None;
         }
         let count = buf[0] as usize;
-        let expected = 1 + count * Self::ENCODED_SIZE;
+        let expected = 1 + 2 + count * Self::ENCODED_SIZE;
         if buf.len() < expected {
             return None;
         }
+        let seq_base = u16::from_le_bytes([buf[1], buf[2]]);
         let mut events = Vec::with_capacity(count);
         for i in 0..count {
-            let offset = 1 + i * Self::ENCODED_SIZE;
+            let offset = 3 + i * Self::ENCODED_SIZE;
             let event = Self::decode(&buf[offset..offset + Self::ENCODED_SIZE])?;
             events.push(event);
         }
-        Some((events, expected))
+        Some((DecodedBatch { events, seq_base }, expected))
+    }
+
+    /// Decode all batches from a datagram payload.
+    /// Returns a Vec where the first element is the primary (current) batch
+    /// and subsequent elements are redundant batches in wire order
+    /// (most recent redundant first, as written by `encode_batch`).
+    pub fn decode_all_batches(buf: &[u8]) -> Vec<DecodedBatch> {
+        let mut batches = Vec::new();
+        let mut offset = 0;
+        while offset < buf.len() {
+            if let Some((batch, consumed)) = Self::decode_batch(&buf[offset..]) {
+                batches.push(batch);
+                offset += consumed;
+            } else {
+                break;
+            }
+        }
+        batches
     }
 }
 

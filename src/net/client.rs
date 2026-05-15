@@ -153,6 +153,7 @@ pub struct ClientConnection {
     cipher: Option<Aes256Gcm>,
     udp_drop: Arc<AtomicU8>,
     batch_redundancy: Arc<AtomicU8>,
+    mouse_batch_size: Arc<AtomicU8>,
 }
 
 impl std::fmt::Debug for ClientConnection {
@@ -177,6 +178,7 @@ impl Clone for ClientConnection {
             cipher: self.cipher.clone(),
             udp_drop: self.udp_drop.clone(),
             batch_redundancy: self.batch_redundancy.clone(),
+            mouse_batch_size: self.mouse_batch_size.clone(),
         }
     }
 }
@@ -184,14 +186,15 @@ impl Clone for ClientConnection {
 /// Send a batch of events over UDP.
 async fn send_batch(
     batch: &[Event],
-    history: &std::collections::VecDeque<Vec<Event>>,
+    seq_base: u16,
+    history: &std::collections::VecDeque<(Vec<Event>, u16)>,
     socket: &UdpSocket,
     conn_id: u64,
     encrypt: bool,
     cipher: Option<&Aes256Gcm>,
     seq: &AtomicU64,
 ) {
-    let buf = Event::encode_batch(batch, history);
+    let buf = Event::encode_batch(batch, seq_base, history);
     let packet: Option<Vec<u8>> = if encrypt {
         if let Some(c) = cipher {
             let s = seq.fetch_add(1, Ordering::SeqCst);
@@ -389,28 +392,36 @@ impl ClientConnection {
         let udp_drop_clone = udp_drop.clone();
         let batch_redundancy = Arc::new(AtomicU8::new(batch_redundancy));
         let batch_redundancy_clone = batch_redundancy.clone();
+        let mouse_batch_size_arc = Arc::new(AtomicU8::new(max_batch));
+        let mouse_batch_size_clone = mouse_batch_size_arc.clone();
         tokio::spawn(async move {
-            let max_batch = max_batch.max(1) as usize;
             const BATCH_TIMEOUT_MS: u64 = 1;
-            let mut batch: Vec<Event> = Vec::with_capacity(max_batch);
-            let mut history: std::collections::VecDeque<Vec<Event>> = std::collections::VecDeque::new();
+            let mut next_seq: u16 = 0;
+            let mut batch: Vec<Event> = Vec::new();
+            let mut history: std::collections::VecDeque<(Vec<Event>, u16)> = std::collections::VecDeque::new();
             let flush_deadline = tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS));
             tokio::pin!(flush_deadline);
 
             loop {
                 let drop_pct = udp_drop_clone.load(Ordering::Relaxed);
                 let redundancy = batch_redundancy_clone.load(Ordering::Relaxed) as usize;
+                let current_max = mouse_batch_size_clone.load(Ordering::Relaxed).max(1) as usize;
+                if batch.capacity() < current_max {
+                    batch.reserve(current_max - batch.capacity());
+                }
                 tokio::select! {
                     Some(event) = udp_rx.recv() => {
                         let is_mouse_move = matches!(event, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. });
                         if is_mouse_move {
                             batch.push(event);
-                            if batch.len() >= max_batch {
+                            if batch.len() >= current_max {
+                                let seq_base = next_seq;
+                                next_seq = next_seq.wrapping_add(batch.len() as u16);
                                 if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                                    send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                                    send_batch(&batch, seq_base, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                                 }
                                 if redundancy > 0 {
-                                    history.push_back(batch.clone());
+                                    history.push_back((batch.clone(), seq_base));
                                     while history.len() > redundancy {
                                         history.pop_front();
                                     }
@@ -423,11 +434,13 @@ impl ClientConnection {
                         } else {
                             // Flush any pending mouse batch before sending the non-mouse event.
                             if !batch.is_empty() {
+                                let seq_base = next_seq;
+                                next_seq = next_seq.wrapping_add(batch.len() as u16);
                                 if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                                    send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                                    send_batch(&batch, seq_base, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                                 }
                                 if redundancy > 0 {
-                                    history.push_back(batch.clone());
+                                    history.push_back((batch.clone(), seq_base));
                                     while history.len() > redundancy {
                                         history.pop_front();
                                     }
@@ -439,18 +452,20 @@ impl ClientConnection {
                             // Send non-mouse event immediately (no batching, no history).
                             let empty_history = std::collections::VecDeque::new();
                             if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                                send_batch(&[event], &empty_history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                                send_batch(&[event], 0, &empty_history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                             }
                             flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
                         }
                     }
                     _ = &mut flush_deadline => {
                         if !batch.is_empty() {
+                            let seq_base = next_seq;
+                            next_seq = next_seq.wrapping_add(batch.len() as u16);
                             if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                                send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                                send_batch(&batch, seq_base, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                             }
                             if redundancy > 0 {
-                                history.push_back(batch.clone());
+                                history.push_back((batch.clone(), seq_base));
                                 while history.len() > redundancy {
                                     history.pop_front();
                                 }
@@ -468,8 +483,9 @@ impl ClientConnection {
             // Flush any remaining events on shutdown
             let drop_pct = udp_drop_clone.load(Ordering::Relaxed);
             if !batch.is_empty() {
+                let seq_base = next_seq;
                 if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                    send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                    send_batch(&batch, seq_base, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                 }
             }
         });
@@ -521,6 +537,7 @@ impl ClientConnection {
             cipher,
             udp_drop,
             batch_redundancy,
+            mouse_batch_size: mouse_batch_size_arc,
         }, phc_to_save))
     }
 
@@ -641,6 +658,10 @@ impl ClientConnection {
 
     pub fn set_batch_redundancy(&self, count: u8) {
         self.batch_redundancy.store(count, Ordering::Relaxed);
+    }
+
+    pub fn set_mouse_batch_size(&self, size: u8) {
+        self.mouse_batch_size.store(size, Ordering::Relaxed);
     }
 }
 

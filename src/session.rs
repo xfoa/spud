@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
@@ -271,6 +271,77 @@ impl KeyTracker {
     }
 }
 
+/// Deduplicates mouse events using a 65536-entry bitmap and a circular buffer.
+/// Each injected mouse event is assigned a u16 sequence number by the client.
+/// The bitmap provides O(1) "already seen?" checks; the circular buffer
+/// tracks which sequence numbers are currently set so they can be evicted
+/// when the window slides forward.
+pub struct MouseHistory {
+    /// One bit per possible u16 sequence number. 65536 bits = 8192 bytes.
+    bitmap: Box<[u8; 8192]>,
+    /// Circular buffer of sequence numbers currently marked in the bitmap.
+    buffer: VecDeque<u16>,
+    /// Maximum number of sequence numbers to track at once.
+    capacity: usize,
+}
+
+impl MouseHistory {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            bitmap: Box::new([0u8; 8192]),
+            buffer: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn resize(&mut self, new_capacity: usize) {
+        self.capacity = new_capacity;
+        while self.buffer.len() > new_capacity {
+            let old = self.buffer.pop_front().unwrap();
+            Self::clear_bit(&mut self.bitmap, old);
+        }
+    }
+
+    /// Check whether a sequence number has been seen.
+    pub fn contains(&self, seq: u16) -> bool {
+        Self::test_bit(&self.bitmap, seq)
+    }
+
+    /// Mark a sequence number as seen, evicting the oldest if at capacity.
+    pub fn push(&mut self, seq: u16) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.contains(seq) {
+            return;
+        }
+        while self.buffer.len() >= self.capacity {
+            let old = self.buffer.pop_front().unwrap();
+            Self::clear_bit(&mut self.bitmap, old);
+        }
+        Self::set_bit(&mut self.bitmap, seq);
+        self.buffer.push_back(seq);
+    }
+
+    fn test_bit(bitmap: &[u8; 8192], seq: u16) -> bool {
+        let idx = (seq >> 3) as usize;
+        let bit = seq & 7;
+        (bitmap[idx] >> bit) & 1 != 0
+    }
+
+    fn set_bit(bitmap: &mut [u8; 8192], seq: u16) {
+        let idx = (seq >> 3) as usize;
+        let bit = seq & 7;
+        bitmap[idx] |= 1 << bit;
+    }
+
+    fn clear_bit(bitmap: &mut [u8; 8192], seq: u16) {
+        let idx = (seq >> 3) as usize;
+        let bit = seq & 7;
+        bitmap[idx] &= !(1 << bit);
+    }
+}
+
 pub struct SessionState {
     pub keys: Option<SessionKeys>,
     pub replay_window: ReplayWindow,
@@ -282,6 +353,7 @@ pub struct SessionState {
     pub screen_width: u16,
     pub screen_height: u16,
     pub window_mode: bool,
+    pub mouse_history: MouseHistory,
 }
 
 impl SessionState {
@@ -297,6 +369,7 @@ impl SessionState {
             screen_width,
             screen_height,
             window_mode: false,
+            mouse_history: MouseHistory::new(0),
         }
     }
 
