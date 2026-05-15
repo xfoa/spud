@@ -1571,7 +1571,7 @@ impl State {
         .spacing(0);
 
         let batch_redundancy_row = row![
-            slider(0..=10, self.batch_redundancy, Message::BatchRedundancyChanged)
+            slider(0..=50, self.batch_redundancy, Message::BatchRedundancyChanged)
                 .width(Length::Fill),
             ui::h_space(12.0),
             text(format!("{}", self.batch_redundancy)).size(14).color(mt::ON_SURFACE),

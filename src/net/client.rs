@@ -402,20 +402,45 @@ impl ClientConnection {
                 let redundancy = batch_redundancy_clone.load(Ordering::Relaxed) as usize;
                 tokio::select! {
                     Some(event) = udp_rx.recv() => {
-                        batch.push(event);
-                        if batch.len() >= max_batch {
-                            if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
-                                send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
-                            }
-                            if redundancy > 0 {
-                                history.push_back(batch.clone());
-                                while history.len() > redundancy {
-                                    history.pop_front();
+                        let is_mouse_move = matches!(event, crate::net::Event::MouseMove { .. } | crate::net::Event::MouseAbs { .. });
+                        if is_mouse_move {
+                            batch.push(event);
+                            if batch.len() >= max_batch {
+                                if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
+                                    send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
                                 }
-                            } else {
-                                history.clear();
+                                if redundancy > 0 {
+                                    history.push_back(batch.clone());
+                                    while history.len() > redundancy {
+                                        history.pop_front();
+                                    }
+                                } else {
+                                    history.clear();
+                                }
+                                batch.clear();
+                                flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
                             }
-                            batch.clear();
+                        } else {
+                            // Flush any pending mouse batch before sending the non-mouse event.
+                            if !batch.is_empty() {
+                                if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
+                                    send_batch(&batch, &history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                                }
+                                if redundancy > 0 {
+                                    history.push_back(batch.clone());
+                                    while history.len() > redundancy {
+                                        history.pop_front();
+                                    }
+                                } else {
+                                    history.clear();
+                                }
+                                batch.clear();
+                            }
+                            // Send non-mouse event immediately (no batching, no history).
+                            let empty_history = std::collections::VecDeque::new();
+                            if drop_pct == 0 || fastrand::u8(0..100) >= drop_pct {
+                                send_batch(&[event], &empty_history, &udp_socket_clone, conn_id_clone, encrypt_clone, cipher_clone.as_ref(), &seq).await;
+                            }
                             flush_deadline.set(tokio::time::sleep(tokio::time::Duration::from_millis(BATCH_TIMEOUT_MS)));
                         }
                     }
