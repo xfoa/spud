@@ -12,6 +12,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(target_os = "linux")]
+use crate::input::InputInjector;
 use crate::net::protocol::ControlMsg;
 use crate::net::tls::build_server_config;
 use crate::session::{generate_session, SessionState, SessionTable};
@@ -137,8 +139,7 @@ fn get_screen_size() -> (u16, u16) {
         let bounds = main.bounds();
         return (bounds.size.width as u16, bounds.size.height as u16);
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    return (1920, 1080);
+    (1920, 1080)
 }
 
 #[cfg(target_os = "linux")]
@@ -342,8 +343,8 @@ async fn run_server(
                                         if session.mouse_history.contains(batch.seq_base) {
                                             continue;
                                         }
-                                        for _event in &batch.events {
-                                            #[cfg(target_os = "linux")]
+                                        for event in &batch.events {
+                                            #[cfg(any(target_os = "linux", target_os = "macos"))]
                                             if let Some(inj) = injector.get() {
                                                 if !is_localhost {
                                                     match event {
