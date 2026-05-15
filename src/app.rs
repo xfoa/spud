@@ -82,12 +82,17 @@ async fn reconnect(
         if cancel.load(Ordering::Relaxed) {
             return Err(());
         }
-        match crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone(), None, max_batch, udp_drop_percent, batch_redundancy).await {
-            Ok(result) => return Ok(result),
-            Err(crate::net::client::ConnectError::FingerprintMismatch(_)) => return Err(()),
-            Err(_) => {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match tokio::time::timeout(
+            remaining,
+            crate::net::Sender::connect(&host, port, addrs.clone(), client_encrypt, client_require_auth, passphrase.clone(), saved_phc.clone(), None, max_batch, udp_drop_percent, batch_redundancy),
+        ).await {
+            Ok(Ok(result)) => return Ok(result),
+            Ok(Err(crate::net::client::ConnectError::FingerprintMismatch(_))) => return Err(()),
+            Ok(Err(_)) => {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
+            Err(_) => return Err(()),
         }
     }
     Err(())
