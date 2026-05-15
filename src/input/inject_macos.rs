@@ -1,10 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::mpsc::{self, Sender as MpscSender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender as MpscSender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use core_graphics::display::CGDisplay;
+use core_graphics::event::{
+    CGEvent, CGEventTapLocation, CGEventType, EventField, KeyCode,
+};
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
 
 use crate::input::key_names;
@@ -22,17 +27,24 @@ pub enum InjectCmd {
     Wheel { dx: i8, dy: i8 },
 }
 
-/// Low-level IOKit HID event injector.
+/// Injects input events into macOS via Core Graphics + IOKit HID.
 pub struct InputInjector {
     tx: MpscSender<InjectCmd>,
     _handle: JoinHandle<()>,
 }
+
+/// Delay before the first repeat keydown is generated.z\
+/// Delay before the first repeat keydown is generated.
+const REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(400);
+/// Interval between subsequent repeat keydowns.
+const REPEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 impl InputInjector {
     pub fn new(screen_width: u16, screen_height: u16) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel::<InjectCmd>();
 
         let handle = thread::spawn(move || {
+            // Mouse goes through IOKit HID so raw-input games see it.
             let hid = match IoKitHid::open() {
                 Some(h) => h,
                 None => {
@@ -41,53 +53,105 @@ impl InputInjector {
                 }
             };
 
-            // Track cursor position for relative movement and for button events.
-            let mut cursor = hid
-                .cursor_position()
-                .unwrap_or_else(|| CGPoint::new(
+            // Scroll and cursor query still need Core Graphics.
+            let cg_source = match CGEventSource::new(CGEventSourceStateID::HIDSystemState) {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!("[spud] Failed to create CGEventSource");
+                    return;
+                }
+            };
+
+            let mut cursor = get_cursor_position(&cg_source).unwrap_or_else(|| {
+                CGPoint::new(
                     f64::from(screen_width) / 2.0,
                     f64::from(screen_height) / 2.0,
-                ));
+                )
+            });
 
             let mut pressed_buttons: HashSet<u8> = HashSet::new();
+            let mut held_keys: HashMap<u16, Instant> = HashMap::new();
 
-            while let Ok(cmd) = rx.recv() {
-                match cmd {
-                    InjectCmd::MouseAbs { x, y } => {
-                        cursor = CGPoint::new(f64::from(x), f64::from(y));
-                        post_mouse_move(&hid, cursor, &pressed_buttons);
-                    }
-                    InjectCmd::MouseRel { dx, dy } => {
-                        cursor.x += f64::from(dx);
-                        cursor.y += f64::from(dy);
-                        // Don't clamp or warp for relative mode — the game/app
-                        // handles its own cursor position.  Just post the delta.
-                        post_mouse_relative(&hid, dx, dy, &pressed_buttons);
-                    }
-                    InjectCmd::KeyDown { code } => {
-                        if let Some(keycode) = macos_keycodes::evdev_to_macos(code) {
-                            hid.post_key(keycode, true);
-                        } else {
-                            eprintln!("[spud] No macOS keycode for evdev {code}");
+            loop {
+                match rx.recv_timeout(REPEAT_INTERVAL) {
+                    Ok(cmd) => {
+                        match cmd {
+                            InjectCmd::MouseAbs { x, y } => {
+                                cursor = CGPoint::new(f64::from(x), f64::from(y));
+                                post_mouse_move(&hid, cursor, &pressed_buttons);
+                            }
+                            InjectCmd::MouseRel { dx, dy } => {
+                                cursor.x += f64::from(dx);
+                                cursor.y += f64::from(dy);
+                                // Don't clamp or warp for relative mode — the game/app
+                                // handles its own cursor position.  Just post the delta.
+                                post_mouse_relative(&hid, dx, dy, &pressed_buttons);
+                            }
+                            InjectCmd::KeyDown { code } => {
+                                if let Some(keycode) = macos_keycodes::evdev_to_macos(code) {
+                                    held_keys.insert(code, Instant::now() + REPEAT_INITIAL_DELAY);
+                                    if let Ok(event) =
+                                        CGEvent::new_keyboard_event(cg_source.clone(), keycode, true)
+                                    {
+                                        event.post(CGEventTapLocation::HID);
+                                    }
+                                } else {
+                                    eprintln!("[spud] No macOS keycode for evdev {code}");
+                                }
+                            }
+                            InjectCmd::KeyUp { code } => {
+                                if let Some(keycode) = macos_keycodes::evdev_to_macos(code) {
+                                    held_keys.remove(&code);
+                                    if let Ok(event) =
+                                        CGEvent::new_keyboard_event(cg_source.clone(), keycode, false)
+                                    {
+                                        event.post(CGEventTapLocation::HID);
+                                    }
+                                } else {
+                                    eprintln!("[spud] No macOS keycode for evdev {code}");
+                                }
+                            }
+                            InjectCmd::ButtonDown { code } => {
+                                pressed_buttons.insert(code as u8);
+                                post_mouse_button(&hid, cursor, code, true);
+                            }
+                            InjectCmd::ButtonUp { code } => {
+                                pressed_buttons.remove(&(code as u8));
+                                post_mouse_button(&hid, cursor, code, false);
+                            }
+                            InjectCmd::Wheel { dx, dy } => {
+                                post_scroll(&hid, &cg_source, dx, dy);
+                            }
                         }
                     }
-                    InjectCmd::KeyUp { code } => {
-                        if let Some(keycode) = macos_keycodes::evdev_to_macos(code) {
-                            hid.post_key(keycode, false);
-                        } else {
-                            eprintln!("[spud] No macOS keycode for evdev {code}");
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+
+                // Pulse key-up / key-down on every repeat tick.
+                // We deliberately do NOT set KEYBOARD_EVENT_AUTOREPEAT on the down
+                // event — a "fresh" keydown resets macOS's accent-menu timer,
+                // whereas an autorepeat keydown is ignored by the Text Input system.
+                // Modifier keys are never pulsed.
+                let now = Instant::now();
+                for (code, next_repeat) in &mut held_keys {
+                    if now >= *next_repeat {
+                        if let Some(keycode) = macos_keycodes::evdev_to_macos(*code) {
+                            let is_modifier = modifier_flag_for_keycode(keycode) != 0;
+                            if !is_modifier {
+                                if let Ok(up) =
+                                    CGEvent::new_keyboard_event(cg_source.clone(), keycode, false)
+                                {
+                                    up.post(CGEventTapLocation::HID);
+                                }
+                                if let Ok(down) =
+                                    CGEvent::new_keyboard_event(cg_source.clone(), keycode, true)
+                                {
+                                    down.post(CGEventTapLocation::HID);
+                                }
+                            }
                         }
-                    }
-                    InjectCmd::ButtonDown { code } => {
-                        pressed_buttons.insert(code as u8);
-                        post_mouse_button(&hid, cursor, code, true);
-                    }
-                    InjectCmd::ButtonUp { code } => {
-                        pressed_buttons.remove(&(code as u8));
-                        post_mouse_button(&hid, cursor, code, false);
-                    }
-                    InjectCmd::Wheel { dx, dy } => {
-                        hid.post_scroll(dx, dy);
+                        *next_repeat = now + REPEAT_INTERVAL;
                     }
                 }
             }
@@ -146,6 +210,15 @@ impl InputInjector {
 }
 
 /* ------------------------------------------------------------------ */
+/* Core Graphics helpers                                              */
+/* ------------------------------------------------------------------ */
+
+fn get_cursor_position(source: &CGEventSource) -> Option<CGPoint> {
+    let event = CGEvent::new(source.clone()).ok()?;
+    Some(event.location())
+}
+
+/* ------------------------------------------------------------------ */
 /* IOKit FFI                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -177,12 +250,24 @@ const NX_RMOUSEUP: u32 = 4;
 const NX_MOUSEMOVED: u32 = 5;
 const NX_LMOUSEDRAGGED: u32 = 6;
 const NX_RMOUSEDRAGGED: u32 = 7;
-const NX_KEYDOWN: u32 = 10;
-const NX_KEYUP: u32 = 11;
-const NX_SCROLLWHEELMOVED: u32 = 22;
 const NX_OMOUSEDOWN: u32 = 25;
 const NX_OMOUSEUP: u32 = 26;
 const NX_OMOUSEDRAGGED: u32 = 27;
+
+const NX_ALPHASHIFTMASK: u32 = 0x00010000;
+const NX_SHIFTMASK: u32 = 0x00020000;
+const NX_CONTROLMASK: u32 = 0x00040000;
+const NX_ALTERNATEMASK: u32 = 0x00080000;
+const NX_COMMANDMASK: u32 = 0x00100000;
+
+const NX_DEVICELCTLKEYMASK: u32 = 0x00000001;
+const NX_DEVICELSHIFTKEYMASK: u32 = 0x00000002;
+const NX_DEVICERSHIFTKEYMASK: u32 = 0x00000004;
+const NX_DEVICELCMDKEYMASK: u32 = 0x00000008;
+const NX_DEVICERCMDKEYMASK: u32 = 0x00000010;
+const NX_DEVICELALTKEYMASK: u32 = 0x00000020;
+const NX_DEVICERALTKEYMASK: u32 = 0x00000040;
+const NX_DEVICERCTLKEYMASK: u32 = 0x00002000;
 
 const K_IOHID_SET_CURSOR_POSITION: u32 = 0x00000002;
 const K_IOHID_SET_RELATIVE_CURSOR_POSITION: u32 = 0x00000004;
@@ -199,7 +284,6 @@ struct IOGPoint {
 #[repr(C)]
 union NXEventData {
     mouse: NXEventDataMouse,
-    key: std::mem::ManuallyDrop<NXEventDataKey>,
     mouse_move: NXEventDataMouseMove,
     scroll_wheel: NXEventDataScrollWheel,
     _padding: [u8; 64],
@@ -218,23 +302,6 @@ struct NXEventDataMouse {
     reserved2: u8,
     reserved3: i32,
     tablet: [u8; 32],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NXEventDataKey {
-    orig_char_set: u16,
-    repeat: i16,
-    char_set: u16,
-    char_code: u16,
-    key_code: u16,
-    orig_char_code: u16,
-    reserved1: i32,
-    keyboard_type: u32,
-    reserved2: i32,
-    reserved3: i32,
-    reserved4: i32,
-    reserved5: [i32; 4],
 }
 
 #[repr(C)]
@@ -284,39 +351,6 @@ impl IoKitHid {
                 return None;
             }
             Some(Self { connect })
-        }
-    }
-
-    fn cursor_position(&self) -> Option<CGPoint> {
-        // IOHIDPostEvent does not expose a "get cursor position" API.
-        // Fall back to Core Graphics for the initial read.
-        use core_graphics::event::CGEvent;
-        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-        let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
-        let event = CGEvent::new(source).ok()?;
-        Some(event.location())
-    }
-
-    fn post_key(&self, keycode: u16, down: bool) {
-        unsafe {
-            let mut data: NXEventData = std::mem::zeroed();
-            data.key = std::mem::ManuallyDrop::new(NXEventDataKey {
-                orig_char_set: 0,
-                repeat: 0,
-                char_set: 0,
-                char_code: 0,
-                key_code: keycode,
-                orig_char_code: 0,
-                reserved1: 0,
-                keyboard_type: 0,
-                reserved2: 0,
-                reserved3: 0,
-                reserved4: 0,
-                reserved5: [0; 4],
-            });
-            let event_type = if down { NX_KEYDOWN } else { NX_KEYUP };
-            let point = IOGPoint { x: 0, y: 0 };
-            IOHIDPostEvent(self.connect, event_type, point, &data, K_NX_EVENT_DATA_VERSION, 0, 0);
         }
     }
 
@@ -380,33 +414,20 @@ impl IoKitHid {
         }
     }
 
-    fn post_scroll(&self, dx: i8, dy: i8) {
-        unsafe {
-            let mut data: NXEventData = std::mem::zeroed();
-            data.scroll_wheel = NXEventDataScrollWheel {
-                delta_axis1: i16::from(dy),
-                delta_axis2: i16::from(dx),
-                delta_axis3: 0,
-                reserved1: 0,
-                fixed_delta_axis1: 0,
-                fixed_delta_axis2: 0,
-                fixed_delta_axis3: 0,
-                point_delta_axis1: 0,
-                point_delta_axis2: 0,
-                point_delta_axis3: 0,
-                reserved8: [0; 4],
-            };
-            let point = IOGPoint { x: 0, y: 0 };
-            IOHIDPostEvent(
-                self.connect,
-                NX_SCROLLWHEELMOVED,
-                point,
-                &data,
-                K_NX_EVENT_DATA_VERSION,
-                0,
-                0,
-            );
-        }
+}
+
+fn modifier_flag_for_keycode(keycode: u16) -> u32 {
+    match keycode {
+        k if k == KeyCode::SHIFT => NX_SHIFTMASK | NX_DEVICELSHIFTKEYMASK,
+        k if k == KeyCode::RIGHT_SHIFT => NX_SHIFTMASK | NX_DEVICERSHIFTKEYMASK,
+        k if k == KeyCode::CONTROL => NX_CONTROLMASK | NX_DEVICELCTLKEYMASK,
+        k if k == KeyCode::RIGHT_CONTROL => NX_CONTROLMASK | NX_DEVICERCTLKEYMASK,
+        k if k == KeyCode::OPTION => NX_ALTERNATEMASK | NX_DEVICELALTKEYMASK,
+        k if k == KeyCode::RIGHT_OPTION => NX_ALTERNATEMASK | NX_DEVICERALTKEYMASK,
+        k if k == KeyCode::COMMAND => NX_COMMANDMASK | NX_DEVICELCMDKEYMASK,
+        k if k == KeyCode::RIGHT_COMMAND => NX_COMMANDMASK | NX_DEVICERCMDKEYMASK,
+        k if k == KeyCode::CAPS_LOCK => NX_ALPHASHIFTMASK,
+        _ => 0,
     }
 }
 
@@ -422,7 +443,6 @@ fn current_drag_type(pressed_buttons: &HashSet<u8>) -> Option<(u32, u8)> {
     } else if pressed_buttons.contains(&2) {
         Some((NX_OMOUSEDRAGGED, 2))
     } else if let Some(&btn) = pressed_buttons.iter().next() {
-        // Back/forward or any other button.
         Some((NX_OMOUSEDRAGGED, btn))
     } else {
         None
@@ -435,7 +455,6 @@ fn post_mouse_move(hid: &IoKitHid, cursor: CGPoint, pressed_buttons: &HashSet<u8
     } else {
         hid.post_mouse(NX_MOUSEMOVED, cursor, K_IOHID_SET_CURSOR_POSITION);
     }
-    // Also warp the hardware cursor so the Dock / hot corners trigger.
     let _ = CGDisplay::warp_mouse_cursor_position(cursor);
 }
 
@@ -445,7 +464,6 @@ fn post_mouse_relative(hid: &IoKitHid, dx: i32, dy: i32, pressed_buttons: &HashS
     } else {
         hid.post_mouse_relative(NX_MOUSEMOVED, dx, dy);
     }
-    // No cursor warp — the application handles the cursor itself.
 }
 
 fn post_mouse_button(hid: &IoKitHid, cursor: CGPoint, wire: u16, pressed: bool) {
@@ -463,4 +481,15 @@ fn post_mouse_button(hid: &IoKitHid, cursor: CGPoint, wire: u16, pressed: bool) 
         }
     };
     hid.post_mouse_button(event_type, cursor, button);
+}
+
+fn post_scroll(_hid: &IoKitHid, source: &CGEventSource, dx: i8, dy: i8) {
+    // Scroll via CGEventPost — games don't need raw scroll and the CG
+    // path handles scroll acceleration / smooth-scrolling correctly.
+    if let Ok(event) = CGEvent::new(source.clone()) {
+        event.set_type(CGEventType::ScrollWheel);
+        event.set_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_1, i64::from(dy));
+        event.set_integer_value_field(EventField::SCROLL_WHEEL_EVENT_DELTA_AXIS_2, i64::from(dx));
+        event.post(CGEventTapLocation::HID);
+    }
 }
