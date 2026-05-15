@@ -1769,8 +1769,15 @@ fn input_event_to_wire(
     use crate::input::InputEvent;
     match event {
         InputEvent::KeyPress { keycode } => {
-            // X11 keycodes are offset by 8 from Linux evdev scancodes.
+            #[cfg(target_os = "linux")]
             let code = keycode.saturating_sub(8) as u16;
+            #[cfg(target_os = "macos")]
+            let code = crate::input::macos_keycodes::macos_to_evdev(*keycode as u16).unwrap_or(0);
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let code = *keycode as u16;
+            if code == 0 {
+                return None;
+            }
             if pressed_keys.insert(code) {
                 Some(crate::net::Event::KeyDown(code, 0))
             } else {
@@ -1778,7 +1785,15 @@ fn input_event_to_wire(
             }
         }
         InputEvent::KeyRelease { keycode } => {
+            #[cfg(target_os = "linux")]
             let code = keycode.saturating_sub(8) as u16;
+            #[cfg(target_os = "macos")]
+            let code = crate::input::macos_keycodes::macos_to_evdev(*keycode as u16).unwrap_or(0);
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let code = *keycode as u16;
+            if code == 0 {
+                return None;
+            }
             pressed_keys.remove(&code);
             Some(crate::net::Event::KeyUp(code, 0))
         }

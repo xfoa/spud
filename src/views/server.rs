@@ -715,7 +715,7 @@ impl State {
         ]
         .spacing(6);
 
-        let multiplier_slider = row![
+        let batch_history_slider = row![
             slider(1..=10, self.batch_history_multiplier, Message::BatchHistoryMultiplierChanged)
                 .width(Length::Fill),
             ui::h_space(12.0),
@@ -723,12 +723,12 @@ impl State {
         ]
         .align_y(iced::Alignment::Center);
 
-        let multiplier_field = column![
-            ui::field_label("Redundancy history multiplier"),
-            multiplier_slider,
+        let batch_history_field = column![
+            ui::field_label("Batch redundancy history"),
+            batch_history_slider,
             ui::v_space(4.0),
             ui::helper_text(
-                "Multiplies the client's batch size and redundancy to determine how many past mouse events the server remembers for deduplication."
+                "How many past mouse events the server remembers for deduplication. Higher values improve packet loss tolerance, but may introduce more lag."
             ),
         ]
         .spacing(6);
@@ -739,7 +739,7 @@ impl State {
                 ui::v_space(12.0),
                 timeout_field,
                 ui::v_space(16.0),
-                multiplier_field,
+                batch_history_field,
             ]
             .spacing(0),
         );

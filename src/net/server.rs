@@ -12,7 +12,7 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::input::InputInjector;
 use crate::net::protocol::ControlMsg;
 use crate::net::tls::build_server_config;
@@ -59,7 +59,7 @@ impl ServerListener {
         #[cfg(target_os = "linux")]
         let helper_cancel: Arc<std::sync::atomic::AtomicBool> = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let injector: Arc<OnceLock<crate::input::InputInjector>> = Arc::new(OnceLock::new());
         #[cfg(target_os = "linux")]
         {
@@ -75,13 +75,24 @@ impl ServerListener {
                 }
             }
         }
+        #[cfg(target_os = "macos")]
+        {
+            match crate::input::InputInjector::new(screen_width, screen_height) {
+                Ok(inj) => {
+                    let _ = injector.set(inj);
+                }
+                Err(e) => {
+                    eprintln!("[spud] Failed to create macOS input injector: {e}");
+                }
+            }
+        }
 
         let s = shutdown.clone();
         let cancel = CancellationToken::new();
         let c = cancel.clone();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, injector, c, batch_history_multiplier));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let handle = tokio::spawn(run_server(tcp, udp, acceptor, s, require_auth, passphrase_hash, encrypt_udp, key_timeout_ms, sessions, screen_width, screen_height, c, batch_history_multiplier));
 
         Ok(Self {
@@ -121,7 +132,30 @@ fn get_screen_size() -> (u16, u16) {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        use core_graphics::display::CGDisplay;
+        let main = CGDisplay::main();
+        let bounds = main.bounds();
+        return (bounds.size.width as u16, bounds.size.height as u16);
+    }
     (1920, 1080)
+}
+
+#[cfg(target_os = "linux")]
+fn wire_to_platform_button(wire: u8) -> u16 {
+    crate::input::wire_to_linux_button(wire)
+}
+
+#[cfg(target_os = "macos")]
+fn wire_to_platform_button(_wire: u8) -> u16 {
+    // macOS injector translates wire codes internally.
+    _wire as u16
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn wire_to_platform_button(wire: u8) -> u16 {
+    wire as u16
 }
 
 #[cfg(target_os = "linux")]
@@ -220,7 +254,7 @@ async fn run_server(
     sessions: Arc<SessionTable>,
     screen_width: u16,
     screen_height: u16,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     injector: Arc<OnceLock<crate::input::InputInjector>>,
     cancel: CancellationToken,
     batch_history_multiplier: u8,
@@ -304,7 +338,6 @@ async fn run_server(
                                     // Wire order is: [current][newest_redundant]...[oldest_redundant],
                                     // so redundant batches are batches[1..] with newest at index 1.
                                     // Ascending = oldest first = iterate in reverse.
-                                    #[cfg(target_os = "linux")]
                                     let is_localhost = src.ip().is_loopback();
                                     for batch in batches[1..].iter().rev() {
                                         if session.mouse_history.contains(batch.seq_base) {
@@ -369,7 +402,7 @@ async fn run_server(
                                                 println!("[server] {src}: {action}");
                                             }
                                         }
-                                        #[cfg(target_os = "linux")]
+                                        #[cfg(any(target_os = "linux", target_os = "macos"))]
                                         if let Some(inj) = injector.get() {
                                             if !is_localhost {
                                                 if needs_key_down {
@@ -379,7 +412,7 @@ async fn run_server(
                                                 }
                                                 if needs_button_down {
                                                     if let crate::net::Event::MouseButtonRepeat(button) = event {
-                                                        inj.button_down(crate::input::wire_to_linux_button(*button));
+                                                        inj.button_down(wire_to_platform_button(*button));
                                                     }
                                                 }
                                                 match event {
@@ -393,10 +426,10 @@ async fn run_server(
                                                         // Heartbeat - tracker already updated, no injection needed
                                                     }
                                                     crate::net::Event::MouseButton { button, pressed: true } => {
-                                                        inj.button_down(crate::input::wire_to_linux_button(*button));
+                                                        inj.button_down(wire_to_platform_button(*button));
                                                     }
                                                     crate::net::Event::MouseButton { button, pressed: false } => {
-                                                        inj.button_up(crate::input::wire_to_linux_button(*button));
+                                                        inj.button_up(wire_to_platform_button(*button));
                                                     }
                                                     crate::net::Event::MouseButtonRepeat(_) => {}
                                                     crate::net::Event::Wheel { dx, dy, .. } => {

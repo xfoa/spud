@@ -44,8 +44,13 @@ Binaries are available from the GitHub project [releases](https://github.com/xfo
 Put them wherever your system expects to find binaries.
 
 On **Linux**, the server can inject input events via a privileged helper that
+<<<<<<< HEAD
 runs through `pkexec`. To start the server without having to enter your
 password (eg if starting on boot), install the polkit rule:
+=======
+runs through `pkexec`. To avoid typing your password every time the server
+starts, install the polkit rule:
+>>>>>>> c8ca0ea (macOS port WIP)
 
 ```bash
 sudo install -Dm644 resources/50-spud-injection.pkla \
@@ -59,11 +64,19 @@ the binary and desktop entry:
 ./install.sh
 ```
 
+<<<<<<< HEAD
 ### macOS
 
 At the moment only available via `cargo run`. Better options coming soon! You
 will need to grant permission in macOS Settings -> Privacy \& Security ->
 Accessibility.
+=======
+On **macOS**, fullscreen/hotkey input capture requires **Accessibility**
+permission (and **Input Monitoring** permission on macOS 10.15+). The app
+will prompt you to enable these in System Settings when you first attempt
+to capture input. Server-side input injection does not require special
+permissions.
+>>>>>>> c8ca0ea (macOS port WIP)
 
 ## Build
 
