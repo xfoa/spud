@@ -61,15 +61,46 @@ is a `postcard`-serialized `ControlMsg`.
 
 ### Control messages
 
-```rust
-pub enum ControlMsg {
-    AuthChallenge { nonce: [u8; 32], salt: String },
-    AuthResponse  { hmac: [u8; 32] },
-    AuthResult    { ok: bool },
-    SessionInit   { conn_id: u64, uuid: [u8; 16], encrypt: bool, auth: bool, screen_width: u16, screen_height: u16 },
-    SetCaptureMode { window_mode: bool },
-    Keepalive,
-}
+```mermaid
+classDiagram
+    class ControlMsg {
+        <<enumeration>>
+        AuthChallenge
+        AuthResponse
+        AuthResult
+        SessionInit
+        SetCaptureMode
+        Keepalive
+    }
+    class AuthChallenge {
+        +[u8; 32] nonce
+        +[u8; 16] salt
+    }
+    class AuthResponse {
+        +[u8; 32] hmac
+    }
+    class AuthResult {
+        +bool ok
+    }
+    class SessionInit {
+        +u64 conn_id
+        +[u8; 16] uuid
+        +bool encrypt
+        +bool auth
+        +u16 screen_width
+        +u16 screen_height
+    }
+    class SetCaptureMode {
+        +bool window_mode
+    }
+    class Keepalive
+
+    ControlMsg --> AuthChallenge
+    ControlMsg --> AuthResponse
+    ControlMsg --> AuthResult
+    ControlMsg --> SessionInit
+    ControlMsg --> SetCaptureMode
+    ControlMsg --> Keepalive
 ```
 
 #### `SessionInit` (server -> client)
