@@ -144,13 +144,24 @@ impl Event {
     }
 
     /// Encode a batch of events into a Vec.
-    /// Format: `[count: u8][event0: 5][event1: 5]...`
-    pub fn encode_batch(events: &[Event]) -> Vec<u8> {
+    /// Format: `[count: u8][event0: 5][event1: 5]...[count_prev1: u8][events...]...`
+    /// The `history` slices are appended after the current batch in reverse order
+    /// (most recent first). The server can read just the first batch and ignore
+    /// the trailing history.
+    pub fn encode_batch(events: &[Event], history: &std::collections::VecDeque<Vec<Event>>) -> Vec<u8> {
         let count = events.len().min(u8::MAX as usize) as u8;
-        let mut buf = Vec::with_capacity(1 + count as usize * Self::ENCODED_SIZE);
+        let history_bytes: usize = history.iter().map(|b| 1 + b.len() * Self::ENCODED_SIZE).sum();
+        let mut buf = Vec::with_capacity(1 + count as usize * Self::ENCODED_SIZE + history_bytes);
         buf.push(count);
         for event in events.iter().take(count as usize) {
             buf.extend_from_slice(&event.encode());
+        }
+        for batch in history.iter().rev() {
+            let c = batch.len().min(u8::MAX as usize) as u8;
+            buf.push(c);
+            for event in batch.iter().take(c as usize) {
+                buf.extend_from_slice(&event.encode());
+            }
         }
         buf
     }

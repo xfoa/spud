@@ -149,12 +149,18 @@ and sends `SessionInit` immediately after the TLS handshake.
 
 ## UDP input plane
 
-Each datagram carries a **batch** of up to 8 events. Batching amortises the
-fixed UDP/IP header overhead (28 bytes) and `ConnId` prefix across multiple
-events, which is critical for high-frequency traffic like mouse movement.
+Each datagram carries a **batch** of events. Batching amortises the fixed
+UDP/IP header overhead (28 bytes) and `ConnId` prefix across multiple events,
+which is critical for high-frequency traffic like mouse movement.
 
-The client buffers events for up to 1 ms or until 8 events accumulate,
-whichever comes first.
+The client buffers events for up to 1 ms or until the configured batch size
+(1-20, default 8) accumulates, whichever comes first.
+
+Optionally, the client may append **redundant batches** (0-10, configurable) to
+each datagram. These are previously sent batches included for reliability on
+lossy networks. Each batch is self-describing with its own `count` byte, so a
+server that does not yet use redundancy can simply read the first batch and
+ignore the trailing data.
 
 ### Plaintext datagram layout
 
@@ -162,11 +168,20 @@ whichever comes first.
 packet-beta
 title UDP datagram (plaintext)
 0-63: "ConnId (u64 LE)"
-64-71: "Count (u8)"
-72-111: "Event 0 (5 bytes)"
-112-151: "Event 1 (5 bytes)"
-...: "..."
 ```
+
+After the 8-byte `ConnId`, the payload is a sequence of self-describing batches:
+
+```
+[count: u8][event0: 5 bytes][event1: 5 bytes]...
+[count_prev1: u8][event0: 5 bytes]...
+```
+
+* `count`: number of events in this batch.
+* `event`: 5-byte fixed-size encoded event.
+* The first batch is the current one. Subsequent batches are optional redundant
+  history appended by the client. A server reads `count`, consumes
+  `count * 5` bytes, and ignores the rest.
 
 ### Encrypted datagram layout
 
@@ -175,12 +190,13 @@ packet-beta
 title UDP datagram (encrypted)
 0-63: "ConnId (u64 LE)"
 64-127: "Sequence (u64 LE)"
-128-255: "Nonce (12 bytes)"
-256-...: "AES-256-GCM ciphertext"
+128-223: "Nonce (96 bits)"
 ```
 
-The ciphertext decrypts to the same batch payload as the plaintext format:
-`[count: u8][events...]`.
+After the 28-byte header, the remainder of the datagram is the
+**AES-256-GCM ciphertext** (variable length). The ciphertext decrypts to the
+same batch-payload format used in plaintext: `[count: u8][events...]` followed
+by any redundant batches.
 
 ### Compact event encoding
 
@@ -238,20 +254,27 @@ The server receives the `u16` scancode and passes it straight to the Linux
 input subsystem (`/dev/uinput` or the privileged helper), so no string parsing
 is required on the hot path.
 
-## Server key state machine
+## Server input state machine
 
-The server maintains a single `HashMap<u16, Instant>` of keys that are
-currently considered held. On each datagram and on each idle tick of the recv
-loop, it runs the rules below and prints the resulting actions.
+The server maintains two maps: `keys: HashMap<u16, Instant>` for held keys and
+`mouse_buttons: HashMap<u8, Instant>` for held mouse buttons. On each datagram
+and on each idle tick of the recv loop, it runs the rules below and prints the
+resulting actions.
 
 | Incoming event       | Held already? | Action                                                    |
 |----------------------|---------------|-----------------------------------------------------------|
-| `KeyDown(name)`      | no            | `press name`; insert with current time.                   |
-| `KeyDown(name)`      | yes           | `release name (lost up)`, `press name`; refresh time.     |
-| `KeyRepeat(name)`    | yes           | `repeat name`; refresh time.                              |
-| `KeyRepeat(name)`    | no            | `press name (repeat without prior down)`; insert.         |
-| `KeyUp(name)`        | yes           | `release name`; remove from map.                          |
-| `KeyUp(name)`        | no            | (ignored)                                                 |
+| `KeyDown(code)`      | no            | `press name`; insert with current time.                   |
+| `KeyDown(code)`      | yes           | `release name (lost up)`, `press name`; refresh time.     |
+| `KeyRepeat(code)`    | yes           | `repeat name`; refresh time.                              |
+| `KeyRepeat(code)`    | no            | `press name (repeat without prior down)`; insert.         |
+| `KeyUp(code)`        | yes           | `release name`; remove from map.                          |
+| `KeyUp(code)`        | no            | (ignored)                                                 |
+| `MouseButton{down}`  | no            | `press mouse N`; insert with current time.                |
+| `MouseButton{down}`  | yes           | `release mouse N (lost up)`, `press mouse N`; refresh.    |
+| `MouseButtonRepeat`  | yes           | `repeat mouse N`; refresh time.                           |
+| `MouseButtonRepeat`  | no            | `press mouse N (repeat without prior down)`; insert.      |
+| `MouseButton{up}`    | yes           | `release mouse N`; remove from map.                       |
+| `MouseButton{up}`    | no            | (ignored)                                                 |
 
 After processing a datagram, and after every idle wake of the recv loop
 (approximately every 200 ms), the server sweeps the map: any key whose last

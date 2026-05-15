@@ -566,7 +566,12 @@ impl State {
             Message::ShowHotkeyOnBlankToggled(v) => self.show_hotkey_on_blank = v,
             Message::EncryptUdpToggled(v) => self.encrypt_udp = v,
             Message::MouseBatchSizeChanged(v) => self.mouse_batch_size = v,
-            Message::BatchRedundancyChanged(v) => self.batch_redundancy = v,
+            Message::BatchRedundancyChanged(v) => {
+                self.batch_redundancy = v;
+                if let Some(sender) = &self.sender {
+                    sender.set_batch_redundancy(v);
+                }
+            }
             Message::KeyRepeatIntervalChanged(v) => self.key_repeat_interval_ms = v,
             Message::UdpDropPercentChanged(v) => {
                 self.udp_drop_percent = v;
