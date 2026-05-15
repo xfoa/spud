@@ -139,7 +139,6 @@ fn get_screen_size() -> (u16, u16) {
         let bounds = main.bounds();
         return (bounds.size.width as u16, bounds.size.height as u16);
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         return (1920, 1080);
     }
