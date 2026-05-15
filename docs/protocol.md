@@ -61,46 +61,55 @@ is a `postcard`-serialized `ControlMsg`.
 
 ### Control messages
 
-```mermaid
-classDiagram
-    class ControlMsg {
-        <<enumeration>>
-        AuthChallenge
-        AuthResponse
-        AuthResult
-        SessionInit
-        SetCaptureMode
-        Keepalive
-    }
-    class AuthChallenge {
-        +[u8; 32] nonce
-        +[u8; 16] salt
-    }
-    class AuthResponse {
-        +[u8; 32] hmac
-    }
-    class AuthResult {
-        +bool ok
-    }
-    class SessionInit {
-        +u64 conn_id
-        +[u8; 16] uuid
-        +bool encrypt
-        +bool auth
-        +u16 screen_width
-        +u16 screen_height
-    }
-    class SetCaptureMode {
-        +bool window_mode
-    }
-    class Keepalive
+All control messages are `postcard`-serialized. Enums encode as a 1-byte
+variant index followed by the struct fields in declaration order. Multi-byte
+integers are little-endian. Booleans are 1 byte (`0x00` or `0x01`).
 
-    ControlMsg --> AuthChallenge
-    ControlMsg --> AuthResponse
-    ControlMsg --> AuthResult
-    ControlMsg --> SessionInit
-    ControlMsg --> SetCaptureMode
-    ControlMsg --> Keepalive
+```mermaid
+packet-beta
+title AuthChallenge (49 bytes)
+0-7: "Variant (u8)"
+8-255: "nonce (32 bytes)"
+256-383: "salt (16 bytes)"
+```
+
+```mermaid
+packet-beta
+title AuthResponse (33 bytes)
+0-7: "Variant (u8)"
+8-255: "hmac (32 bytes)"
+```
+
+```mermaid
+packet-beta
+title AuthResult (2 bytes)
+0-7: "Variant (u8)"
+8-15: "ok (bool)"
+```
+
+```mermaid
+packet-beta
+title SessionInit (31 bytes)
+0-7: "Variant (u8)"
+8-71: "conn_id (u64 LE)"
+72-199: "uuid (16 bytes)"
+200-207: "encrypt (bool)"
+208-215: "auth (bool)"
+216-231: "screen_width (u16 LE)"
+232-247: "screen_height (u16 LE)"
+```
+
+```mermaid
+packet-beta
+title SetCaptureMode (2 bytes)
+0-7: "Variant (u8)"
+8-15: "window_mode (bool)"
+```
+
+```mermaid
+packet-beta
+title Keepalive (1 byte)
+0-7: "Variant (u8)"
 ```
 
 #### `SessionInit` (server -> client)
