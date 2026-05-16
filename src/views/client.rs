@@ -1602,7 +1602,7 @@ impl State {
         let batch_redundancy_field = column![
             text("Redundant batches").size(16).color(mt::ON_SURFACE),
             ui::v_space(4.0),
-            ui::helper_text("Include previously sent batches in each UDP packet to improve reliablity at the cost of latency."),
+            ui::helper_text("Include this many previously sent batches in each UDP packet to improve reliablity and latency in poor network conditions."),
             ui::v_space(16.0),
             batch_redundancy_row,
         ]
