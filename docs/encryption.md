@@ -7,6 +7,10 @@ the LAN.
 
 ## Threat model
 
+The encryption implementation is not intended as complete, military grade,
+state-secret-level protection, but to mitigate most common attack scenarios
+in a latency efficient manner. The encryption layer protects against:
+
 * **Passive attacker on the LAN** (packet sniffing): encryption hides key
   names, mouse deltas, and timing of input events.
 * **Active attacker** (packet injection / replay): authenticated encryption
@@ -17,10 +21,12 @@ the LAN.
   private key cannot impersonate it on subsequent connections.
 
 The encryption layer does **not** protect against:
+
 * A compromised server (it sees decrypted events).
 * A malicious client connecting to a legitimate server (mitigated by the
   optional challenge-response authentication layer).
 * Traffic analysis (packet sizes and timing are not padded or obfuscated).
+* Feline intervention.
 
 ## Overview
 

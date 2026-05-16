@@ -26,12 +26,15 @@ There already exist tools that solve similar problems to Spud, so why not use th
 * Optional local screen blanking on input capture
 * Tolerance of poor network conditions
 * Optional password protection and [encryption](docs/encryption.md)
+* Tunable performance and reliability settings
 
 ## Supported platforms
 
 * Linux
   * X11
-  * Wayland (Gnome, KDE, COSMIC, possibly more!)
+    * Tested on Gnome and KDE
+  * Wayland
+    * Tested on Gnome, KDE, and COSMIC
 * macOS
   * Tested on Tahoe (26)
 * Windows support comming soon!
