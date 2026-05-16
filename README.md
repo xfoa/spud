@@ -3,7 +3,8 @@
 ![The Spud icon, a potato with a game controller D-pad and buttons carved into it](resources/icon.png)
 
 Spud solves the problem of wanting to play games on a computer attached your TV, from a laptop on your couch.
-It's a cross-platform remote control application that sends local input to a remote server, and is optimised for gaming, meaning that input is as low latency as possible.
+It's a cross-platform remote control application that sends local input to a remote server, and is optimised for gaming.
+Input is as responsive as possible, and protocol parameters are tunable for latency and reliability.
 As it's intended to be used in a situation where you can already see the output from the server on another device, it doesn't accept video or sound output from the server.
 
 ## Why use Spud?
