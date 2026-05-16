@@ -21,7 +21,7 @@ There already exist tools that solve similar problems to Spud, so why not use th
 * Cross-platform (WIP)
 * Low latency input streaming
 * Input capture toggling by hotkey
-* Absolute or relative pointer movement
+* Relative or absolute pointer movement
 * LAN discovery
 * Optional local screen blanking on input capture
 * Tolerance of poor network conditions
