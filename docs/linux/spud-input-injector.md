@@ -1,10 +1,7 @@
 # spud injection-helper
 
-The `spud injection-helper` is a small privileged companion process used on
-**Linux** to open `/dev/uinput` and inject input events on behalf of the main
-Spud server. Because `/dev/uinput` is typically restricted to root or the
-`input` group, the helper runs under `pkexec` so it can acquire the necessary
-privileges without requiring the entire GUI application to run as root.
+The `spud injection-helper` is a small privileged companion process used on **Linux** to open `/dev/uinput` and inject input events on behalf of the main Spud server.
+Because `/dev/uinput` is typically restricted to root or the `input` group, the helper runs under `pkexec` so it can acquire the necessary privileges without requiring the entire GUI application to run as root.
 
 ## Architecture
 
@@ -29,16 +26,13 @@ flowchart LR
    ```
    pkexec /path/to/spud injection-helper /tmp/spud-input-{pid}.sock 1920 1080
    ```
-4. The helper creates a `kinput` mouse device and an `evdev` virtual device,
-   binds the Unix socket, and waits for a single client connection.
+4. The helper creates a `kinput` mouse device and an `evdev` virtual device, binds the Unix socket, and waits for a single client connection.
 5. The server connects to the socket and forwards `InjectCmd` messages.
-6. When the server stops (or the connection closes), the helper exits
-   automatically.
+6. When the server stops (or the connection closes), the helper exits automatically.
 
 ## IPC protocol
 
-Commands are sent over the Unix socket as length-prefixed
-`postcard`-serialized messages:
+Commands are sent over the Unix socket as length-prefixed `postcard`-serialized messages:
 
 ```mermaid
 packet-beta
@@ -68,8 +62,8 @@ pub enum InjectCmd {
 
 ## Direct mode (no helper)
 
-If your user is in the `input` group, the server can open `/dev/uinput`
-directly and the helper is never spawned. To add yourself:
+If your user is in the `input` group, the server can open `/dev/uinput` directly and the helper is never spawned.
+To add yourself:
 
 ```bash
 sudo usermod -aG input $USER
@@ -87,19 +81,15 @@ sudo install -Dm644 resources/50-spud-injection.pkla \
     /etc/polkit-1/localauthority/50-local.d/50-spud-injection.pkla
 ```
 
-This returns `yes` for `pkexec` invocations by active local users in the
-`sudo` group, so no password prompt is shown.
+This returns `yes` for `pkexec` invocations by active local users in the `sudo` group, so no password prompt is shown.
 
 ## Socket path
 
-The socket is created at `/tmp/spud-input-{pid}.sock` where `{pid}` is the
-main spud process ID. The helper `chmod`s the socket to `777` after binding so
-the unprivileged server process can connect.
+The socket is created at `/tmp/spud-input-{pid}.sock` where `{pid}` is the main spud process ID.
+The helper `chmod`s the socket to `777` after binding so the unprivileged server process can connect.
 
 ## Helper lifecycle
 
 * One helper instance per server session.
-* The helper exits when the Unix socket connection closes (server stopped or
-  restarted).
-* The server explicitly kills the helper child process when the injector is
-dropped, ensuring no root process lingers after shutdown.
+* The helper exits when the Unix socket connection closes (server stopped or restarted).
+* The server explicitly kills the helper child process when the injector is dropped, ensuring no root process lingers after shutdown.
