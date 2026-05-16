@@ -169,6 +169,31 @@ title AuthChallenge (49 bytes)
 
 The client must respond with an `AuthResponse` within 10 seconds.
 
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    Note over S: Server stores PHC<br/>(Argon2id hash + salt)
+
+    S->>C: AuthChallenge { nonce (32 B), salt (16 B) }
+
+    Note over C: Client derives key:<br/>Argon2id(passphrase, salt)
+    Note over C: Client computes:<br/>hmac = HMAC-SHA256(nonce, key)
+
+    C->>S: AuthResponse { hmac }
+
+    Note over S: Server recomputes HMAC<br/>from stored PHC + nonce
+
+    alt HMAC matches
+        S->>C: AuthResult { ok: true }
+        S->>C: SessionInit
+    else HMAC mismatch
+        S->>C: AuthResult { ok: false }
+        S--xC: close TLS
+    end
+```
+
 #### `AuthResponse` (client -> server)
 
 Sent by the client in reply to `AuthChallenge`.
