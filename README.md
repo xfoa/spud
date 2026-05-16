@@ -9,12 +9,21 @@ As it's intended to be used in a situation where you can already see the output 
 
 ## Why use Spud?
 
+So you got yourself a wee gaming rig for your TV, but you don't have a controller or you prefer keyboard/mouse.
+Spud's got you: run the server on your gaming machine, and the client on your laptop, and *voilà*!
+You can now game on your big TV and impressive sound system from the comfort of your couch, without wires!
+
+Spud is optimised for gaming, and is easy to set up.
+It's also open-source, so if something is broken or there's a feature you'd like to implement, you're very welcome to [contribute](https://github.com/xfoa/spud/#contribute).
+
+## Why not use something else?
+
 There already exist tools that solve similar problems to Spud, so why not use them instead?
 
 * [Synergy](https://symless.com/synergy) is a great tool for remote control, but its latency makes it unsuitable for gaming.
 * [Parsec](https://parsec.app/) is fantastically optimised and easy to set up, but it's too heavyweight when you don't need video sent back to the controlling device.
 * [Moonlight/Sunlight](https://moonlight-stream.org/) are brilliant projects, but can be difficult to set up and don't support input-only mode.
-* [Lan Mouse](https://github.com/feschber/lan-mouse) is a very similar project to this, but isn't optimised for gaming.
+* [Lan Mouse](https://github.com/feschber/lan-mouse) is a very similar project to this, but is less optimised.
 
 ## Features
 
@@ -56,8 +65,7 @@ sudo install -Dm644 resources/50-spud-injection.pkla \
     /etc/polkit-1/localauthority/50-local.d/50-spud-injection.pkla
 ```
 
-Alternatively, run the provided install script which also builds and installs
-the binary and desktop entry:
+Alternatively, run the provided install script which also builds and installs the binary and desktop entry:
 
 ```bash
 ./install.sh
@@ -65,13 +73,12 @@ the binary and desktop entry:
 
 ### macOS
 
-At the moment only available via `cargo run`. Better options coming soon! 
+At the moment only available via `cargo run`.
+Better options coming soon! 
 
-On **macOS**, fullscreen/hotkey input capture requires **Accessibility**
-permission (and **Input Monitoring** permission on macOS 10.15+). The app
-will prompt you to enable these in System Settings when you first attempt
-to capture input. Server-side input injection does not require special
-permissions.
+On **macOS**, fullscreen/hotkey input capture requires **Accessibility** permission (and **Input Monitoring** permission on macOS 10.15+).
+The app will prompt you to enable these in System Settings when you first attempt to capture input.
+Server-side input injection does not require special permissions.
 
 ## Build
 
