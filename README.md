@@ -14,7 +14,7 @@ There already exist tools that solve similar problems to Spud, so why not use th
 * [Synergy](https://symless.com/synergy) is a great tool for remote control, but its latency makes it unsuitable for gaming.
 * [Parsec](https://parsec.app/) is fantastically optimised and easy to set up, but it's too heavyweight when you don't need video sent back to the controlling device.
 * [Moonlight/Sunlight](https://moonlight-stream.org/) are brilliant projects, but can be difficult to set up and don't support input-only mode.
-
+* [Lan Mouse](https://github.com/feschber/lan-mouse) is a very similar project to this, but isn't optimised for gaming.
 
 ## Features
 
